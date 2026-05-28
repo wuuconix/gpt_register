@@ -1,0 +1,8 @@
+{
+  "tokenOutputDirs": [
+    "tokens",
+    "/home/ec2-user/CLIProxyAPI/auths"
+  ],
+  "useChrome": true,
+  "chromePath": "xxx"
+}

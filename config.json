@@ -1,0 +1,23 @@
+{
+  "heroSmsApiKey": "xxxx",
+  "heroSmsService": "dr",
+  "heroSmsCountry": 16,
+  "mailBaseUrl": "xxx",
+  "mailAdminPassword": "xxx",
+  "mailSitePassword": "",
+  "mailDomain": "xxx",
+  "mailDomains": [
+    "xxx",
+    "xxx"
+  ],
+  "proxyHost": "",
+  "proxyPort": 0,
+  "proxyUsername": "",
+  "proxyPassword": "",
+  "tokenOutputDir": "tokens",
+  "tokenOutputDirs": [
+    "tokens"
+  ],
+  "useChrome": true,
+  "chromePath": "/usr/bin/google-chrome-stable"
+}
