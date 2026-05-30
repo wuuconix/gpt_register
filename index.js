@@ -18,6 +18,7 @@ const args = process.argv.slice(2);
 const PHASE2_ONLY = args.includes('--phase2');
 const PHASE3_ONLY = args.includes('--phase3');
 const PHASE8_ONLY = args.includes('--phase8');
+const STOP_AFTER_PHASE2 = args.includes('--stop-after-phase2');
 const TEST_SMS_COUNTRY_ONLY = args.includes('--test-sms-country');
 const COUNTRY_ARG = (args.find(a => a.startsWith('--country=')) || '').split('=')[1] || '';
 const TARGET_COUNT = parseInt(args.find(a => /^\d+$/.test(a)) || '1', 10);
@@ -1317,10 +1318,8 @@ async function runSingleRegistration() {
                 smsOperator: account.smsOperator || SELECTED_SMS_OPERATOR || '',
             });
 
-            const tokenData = await phase3(smsProvider, mailProvider, browserService, oauthService, userData, runContext);
-            updateAccountStatus(account.phone, 'oauth_done');
-            console.log('[主程序] Phase2 完成！');
-            console.log(`[主程序] Token 已保存，邮箱: ${tokenData.email}`);
+            console.log('[主程序] Phase2 完成，已停在邮箱绑定收尾状态');
+            console.log(`[主程序] 已绑定邮箱: ${phase2Data.email}`);
             return true;
         }
 
@@ -1364,6 +1363,13 @@ async function runSingleRegistration() {
             phoneCountry,
             smsOperator: SELECTED_SMS_OPERATOR || '',
         });
+
+        if (STOP_AFTER_PHASE2) {
+            await finalizeSmsActivation(smsProvider);
+            console.log('[主程序] 已按 --stop-after-phase2 停在第二阶段收尾状态');
+            console.log(`[主程序] 已绑定邮箱: ${phase2Data.email}`);
+            return true;
+        }
 
         // 3. 第三阶段：临时邮箱登录并获取 token
         const tokenData = await phase3(smsProvider, mailProvider, browserService, oauthService, userData, runContext);
@@ -1651,6 +1657,36 @@ async function startBatch() {
         SELECTED_PHONE_COUNTRY = await resolveRunPhoneCountry();
         const operatorSelection = await resolveRunSmsOperator(SELECTED_PHONE_COUNTRY);
         SELECTED_SMS_OPERATOR = operatorSelection?.operator || '';
+    }
+
+    if (PHASE2_ONLY || STOP_AFTER_PHASE2) {
+        const target = PHASE2_ONLY ? 1 : TARGET_COUNT;
+        let completed = 0;
+        while (completed < target) {
+            console.log(`\n[进度] Phase2 ${completed} / ${target}`);
+            try {
+                await runSingleRegistration();
+                completed++;
+            } catch (error) {
+                BATCH_FAILURES.push(buildRunContextSummary(error?.runContext || {}, error));
+                const shouldRetryImmediately = !!error?.noRetryDelay
+                    || error?.code === 'SMS_ACTIVATION_CANCELLED'
+                    || error?.code === 'SMS_CODE_TIMEOUT_CANCELLED'
+                    || error?.code === 'PHONE_ALREADY_REGISTERED';
+                if (shouldRetryImmediately) {
+                    console.error('[主程序] Phase2 流程失败，立即进入下一轮...');
+                    continue;
+                }
+                console.error('[主程序] Phase2 流程失败，30 秒后重试...');
+                await new Promise(r => setTimeout(r, 30000));
+            }
+        }
+
+        console.log(`\n[完成] Phase2 收尾数量 (${completed}) 已达目标 (${target})。`);
+        if (BATCH_FAILURES.length > 0) {
+            printBatchFailureSummary(BATCH_FAILURES);
+        }
+        return;
     }
 
     archiveExistingTokens();

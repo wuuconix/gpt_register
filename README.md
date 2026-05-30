@@ -158,8 +158,18 @@ node index.js 1 --country=US
 node index.js --phase2
 ```
 
-前提：`accounts.json` 内存在可恢复账号。  
+前提：`accounts.json` 内存在可恢复账号。
 启动后会按创建时间倒序列出候选账号（手机号 / 时间 / 状态 / 国家 / 姓名），让你交互式选择要继续绑定邮箱的那一条。
+该模式只执行到邮箱绑定完成，不会继续换 token。
+
+### 2.5) 新注册但停在 Phase 2 收尾（`--stop-after-phase2`）
+
+```bash
+node index.js 1 --stop-after-phase2
+```
+
+作用：正常注册手机号并绑定临时邮箱，但在 Phase 2 邮箱绑定完成后停止。
+适合需要停在“账号已注册 + 邮箱已绑定，但还没换 token”的状态继续开发。
 
 ### 3) 只补最后一步 Token（`--phase3`）
 
