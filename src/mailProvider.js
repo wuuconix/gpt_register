@@ -7,7 +7,7 @@ class MailProvider {
         this.adminPassword = options.adminPassword;
         this.sitePassword = options.sitePassword || '';
         this.domain = options.domain;
-        this.provider = String(options.provider || 'auto').toLowerCase(); // auto | legacy | cloud-mail
+        this.provider = String(options.provider || 'auto').toLowerCase(); // auto | legacy | cloud-mail | cloudflare-worker
         this.adminEmail = options.adminEmail || '';
         this.adminToken = options.adminToken || '';
         this.userType = Number(options.userType) || 1;
@@ -48,6 +48,17 @@ class MailProvider {
             'Content-Type': 'application/json',
             'Authorization': token,
         };
+    }
+
+    _cloudflareWorkerHeaders() {
+        const token = this.adminToken || this.adminPassword || '';
+        const headers = {
+            'Content-Type': 'application/json',
+        };
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+        return headers;
     }
 
     _normalizeAddress(address) {
@@ -275,12 +286,42 @@ class MailProvider {
         return { jwt: this.jwt, address: this.address, addressId: this.addressId };
     }
 
+    async _createAddressCloudflareWorker(name = null) {
+        const emailName = name || this._randomName();
+        const domain = String(this.domain || '').trim().replace(/^@/, '');
+        if (!domain) {
+            throw new Error('[cloudflare-worker] mailDomain 为空，无法生成邮箱地址');
+        }
+
+        const response = await axios.post(
+            `${this.baseUrl}/api/create-address`,
+            { name: emailName, domain },
+            {
+                headers: this._cloudflareWorkerHeaders(),
+                timeout: 15000,
+            }
+        );
+
+        const address = response.data?.address || `${emailName}@${domain}`;
+        this.jwt = this.adminToken || this.adminPassword || 'cloudflare-worker';
+        this.address = address;
+        this.addressId = response.data?.id || null;
+        this.addressPassword = null;
+        this._cacheCurrentSession();
+
+        console.log(`[Mail][cloudflare-worker] 创建邮箱: ${this.address}`);
+        return { jwt: this.jwt, address: this.address, addressId: this.addressId };
+    }
+
     async createAddress(name = null) {
         if (this.provider === 'legacy') {
             return await this._createAddressLegacy(name);
         }
         if (this.provider === 'cloud-mail') {
             return await this._createAddressCloudMail(name);
+        }
+        if (this.provider === 'cloudflare-worker') {
+            return await this._createAddressCloudflareWorker(name);
         }
 
         // auto mode: 优先 legacy，不兼容时自动切 cloud-mail
@@ -313,6 +354,9 @@ class MailProvider {
 
     getInboxUrl() {
         if (this.provider === 'cloud-mail') {
+            return `${this.baseUrl}/`;
+        }
+        if (this.provider === 'cloudflare-worker') {
             return `${this.baseUrl}/`;
         }
         return `${this.baseUrl}/?jwt=${this.jwt}`;
@@ -383,9 +427,19 @@ class MailProvider {
         return this._normalizeCloudMailRows(rows);
     }
 
+    async _getMailsCloudflareWorker(limit = 10, offset = 0) {
+        if (!this.address) {
+            throw new Error('[cloudflare-worker] 当前邮箱地址不存在，无法获取邮件');
+        }
+        return await this._getMailsByAddressCloudflareWorker(this.address, limit, offset);
+    }
+
     async getMails(limit = 10, offset = 0) {
         if (this.provider === 'cloud-mail') {
             return await this._getMailsCloudMail(limit);
+        }
+        if (this.provider === 'cloudflare-worker') {
+            return await this._getMailsCloudflareWorker(limit, offset);
         }
         return await this._getMailsLegacy(limit, offset);
     }
@@ -518,9 +572,34 @@ class MailProvider {
         return this._normalizeCloudMailRows(rows);
     }
 
+    async _getMailsByAddressCloudflareWorker(address, limit = 10, offset = 0) {
+        const normalized = this._normalizeAddress(address);
+        if (!normalized) {
+            throw new Error('email is empty');
+        }
+
+        const response = await axios.get(
+            `${this.baseUrl}/api/mails`,
+            {
+                params: {
+                    address: normalized,
+                    limit: Math.max(1, Math.min(50, Number(limit) || 10)),
+                    offset: Math.max(0, Number(offset) || 0),
+                },
+                headers: this._cloudflareWorkerHeaders(),
+                timeout: 15000,
+            }
+        );
+        const mails = this._extractMailsFromPayload(response.data) || [];
+        return this._normalizeCloudMailRows(mails);
+    }
+
     async getMailsByAddress(address, limit = 10, offset = 0) {
         if (this.provider === 'cloud-mail') {
             return await this._getMailsByAddressCloudMail(address, limit);
+        }
+        if (this.provider === 'cloudflare-worker') {
+            return await this._getMailsByAddressCloudflareWorker(address, limit, offset);
         }
 
         const normalized = this._normalizeAddress(address);

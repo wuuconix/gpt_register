@@ -86,7 +86,7 @@ CONFIG_FILE=./config.local.json node index.js 1
 | `phoneCountryCode` | 默认手机国家 ISO 代码，例如 `GB` / `US` | 否 |
 | `phoneCountries` | 可参与比价与匹配的国家清单；未填时使用内置常见国家列表 | 否 |
 | `mailBaseUrl` | 邮箱服务根地址 | 是 |
-| `mailProvider` | 邮箱协议，默认 `cloud-mail` | 否 |
+| `mailProvider` | 邮箱协议，默认 `cloud-mail`；支持 `cloud-mail` / `legacy` / `cloudflare-worker` | 否 |
 | `mailAdminEmail` | cloud-mail 管理员登录邮箱（可不填：会尝试用 `mailAdminPassword` 作为邮箱） | 建议填 |
 | `mailAdminPassword` | cloud-mail 管理员登录密码（或 legacy 的 admin key） | 是 |
 | `mailAdminToken` | cloud-mail 管理员 token，填了就不再走 `/api/login` | 否 |
@@ -97,6 +97,29 @@ CONFIG_FILE=./config.local.json node index.js 1
 | `proxyHost/proxyPort/proxyUsername/proxyPassword` | 浏览器和 OAuth 请求代理（可选） | 否 |
 | `tokenOutputDir` | 单目录输出 token | 否 |
 | `tokenOutputDirs` | 多目录输出 token，配置后优先于 `tokenOutputDir` | 否 |
+
+### Cloudflare Email Routing
+
+如果使用 Cloudflare Email Routing + Email Worker：
+
+1. 部署 `cloudflare-email-worker.js` 到 Cloudflare Worker。
+2. 创建 D1 数据库并执行 `cloudflare-email-worker-schema.sql`。
+3. 给 Worker 绑定 D1，绑定名必须是 `DB`。
+4. 设置 Worker 环境变量：
+   - `MAIL_API_TOKEN`：本脚本查询邮件用的密钥
+   - `MAIL_DOMAIN`：你的收信域名
+5. 在 Email Routing 的 catch-all 规则中选择 `Send to Worker`。
+6. 配置本项目：
+
+```json
+{
+  "mailProvider": "cloudflare-worker",
+  "mailBaseUrl": "https://your-worker.your-subdomain.workers.dev",
+  "mailAdminToken": "same-as-MAIL_API_TOKEN",
+  "mailDomain": "your-domain.example.com",
+  "mailDomains": ["your-domain.example.com"]
+}
+```
 
 ## 启动方式
 

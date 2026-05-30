@@ -1,4 +1,5 @@
 const { connect } = require('puppeteer-real-browser');
+const fs = require('fs');
 const config = require('./config');
 const { logInputValue } = require('./runLogger');
 
@@ -19,6 +20,9 @@ class BrowserService {
         this.browserOptions = {
             useChrome: browserOptions.useChrome ?? config.useChrome ?? true,
             chromePath: executablePath,
+            userDataDir: browserOptions.userDataDir ?? config.browserUserDataDir ?? '',
+            incognito: browserOptions.incognito ?? config.browserIncognito ?? true,
+            clearChatGptSession: browserOptions.clearChatGptSession ?? config.browserClearChatGptSession ?? false,
         };
     }
 
@@ -29,8 +33,16 @@ class BrowserService {
         const connectOptions = {
             headless: false,
             turnstile: true,
+            disableXvfb: process.platform === 'linux' && !!process.env.DISPLAY,
             args: ['--no-sandbox', '--disable-gpu', '--lang=zh-CN'],
         };
+        if (this.browserOptions.incognito) {
+            connectOptions.args.push('--incognito');
+        }
+
+        if (connectOptions.disableXvfb) {
+            console.log(`[Browser] 使用当前图形会话 DISPLAY=${process.env.DISPLAY}，禁用 puppeteer-real-browser 内置 Xvfb`);
+        }
 
         // 使用显式配置的 Chrome/Chromium 可执行文件
         if (this.browserOptions.useChrome && this.browserOptions.chromePath) {
@@ -42,6 +54,15 @@ class BrowserService {
             // 兜底：部分 chrome-launcher 版本会读取 CHROME_PATH
             process.env.CHROME_PATH = this.browserOptions.chromePath;
             console.log(`[Browser] 使用浏览器: ${this.browserOptions.chromePath}`);
+        }
+
+        if (this.browserOptions.userDataDir) {
+            fs.mkdirSync(this.browserOptions.userDataDir, { recursive: true });
+            connectOptions.customConfig = {
+                ...(connectOptions.customConfig || {}),
+                userDataDir: this.browserOptions.userDataDir,
+            };
+            console.log(`[Browser] 使用用户数据目录: ${this.browserOptions.userDataDir}`);
         }
 
         if (this.proxy) {
@@ -115,26 +136,41 @@ class BrowserService {
     }
 
     /**
-     * 通过文字匹配点击按钮（完整鼠标事件链，兼容 React）
+     * 通过文字匹配点击按钮。
      */
     async clickButtonByText(text, timeout = 10000) {
         const candidates = Array.isArray(text) ? text : [text];
         const start = Date.now();
         while (Date.now() - start < timeout) {
-            const clicked = await this.page.evaluate((texts) => {
-                for (const b of document.querySelectorAll('button, [role="button"]')) {
-                    const innerText = b.innerText || '';
-                    if (texts.some(t => innerText.includes(t))) {
-                        // 完整的鼠标事件链以触发 React 事件处理
+            const handle = await this.page.evaluateHandle((texts) => {
+                const elements = Array.from(document.querySelectorAll('button, [role="button"], a'));
+                return elements.find((el) => {
+                    const innerText = el.innerText || el.textContent || '';
+                    const disabled = el.disabled || el.getAttribute('aria-disabled') === 'true';
+                    return !disabled && texts.some(t => innerText.includes(t));
+                }) || null;
+            }, candidates).catch(() => null);
+
+            const element = handle?.asElement?.();
+            if (element) {
+                try {
+                    await element.evaluate(el => el.scrollIntoView({ block: 'center', inline: 'center' }));
+                    await SLEEP(250);
+                    await element.click({ delay: 80 });
+                    await handle.dispose().catch(() => {});
+                    return;
+                } catch (error) {
+                    await this.page.evaluate((el) => {
                         ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(type => {
-                            b.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+                            el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
                         });
-                        return true;
-                    }
+                    }, element).catch(() => {});
+                    await handle.dispose().catch(() => {});
+                    return;
                 }
-                return false;
-            }, candidates);
-            if (clicked) return;
+            }
+
+            await handle?.dispose?.().catch(() => {});
             await SLEEP(1000);
         }
         throw new Error(`找不到包含"${candidates.join('" / "')}"的按钮`);
@@ -196,16 +232,67 @@ class BrowserService {
         console.log(`[Browser] 截图: /tmp/${filename}`);
     }
 
+    async clearChatGptSession() {
+        const authCookieDomains = [
+            'chatgpt.com',
+            '.chatgpt.com',
+            'chat.openai.com',
+            '.chat.openai.com',
+            'auth.openai.com',
+            '.auth.openai.com',
+            'openai.com',
+            '.openai.com',
+        ];
+        const storageOrigins = [
+            'https://chatgpt.com',
+            'https://chat.openai.com',
+            'https://auth.openai.com',
+            'https://openai.com',
+        ];
+        const preserveCookieNames = new Set([
+            'cf_clearance',
+            '__cf_bm',
+            '_cfuvid',
+        ]);
+
+        try {
+            const client = await this.page.target().createCDPSession();
+            const allCookies = (await client.send('Network.getAllCookies')).cookies || [];
+            const authCookies = allCookies.filter((cookie) => (
+                authCookieDomains.includes(cookie.domain)
+                && !preserveCookieNames.has(cookie.name)
+                && !cookie.name.toLowerCase().startsWith('cf_')
+                && !cookie.name.toLowerCase().startsWith('__cf')
+            ));
+
+            for (const cookie of authCookies) {
+                await client.send('Network.deleteCookies', {
+                    name: cookie.name,
+                    domain: cookie.domain,
+                    path: cookie.path || '/',
+                }).catch(() => {});
+            }
+
+            const storageTypes = 'appcache,cache_storage,indexeddb,local_storage,service_workers,websql';
+            for (const origin of storageOrigins) {
+                await client.send('Storage.clearDataForOrigin', {
+                    origin,
+                    storageTypes,
+                }).catch(() => {});
+            }
+
+            await client.detach().catch(() => {});
+            console.log(`[Browser] 已清理 ChatGPT/OpenAI 登录态 cookie ${authCookies.length} 个`);
+        } catch (error) {
+            console.warn(`[Browser] 清理 ChatGPT/OpenAI 登录态失败: ${error.message}`);
+        }
+    }
+
     logInput(field, value, context = '') {
         logInputValue(field, value, context);
     }
 
-    async fillPasswordInput(selector, password, logField, logTag) {
-        const input = await this.page.$(selector);
-        if (!input) {
-            throw new Error(`未找到密码输入框: ${selector}`);
-        }
-
+    async fillPasswordElement(input, password, logField, logTag) {
         await input.click({ clickCount: 3 }).catch(() => {});
         await SLEEP(150);
 
@@ -220,27 +307,33 @@ class BrowserService {
         await this.page.keyboard.press('Backspace').catch(() => {});
         await this.page.keyboard.press('Delete').catch(() => {});
 
-        await this.page.evaluate((sel) => {
-            const el = document.querySelector(sel);
+        await this.page.evaluate((el) => {
             if (!el) return;
             el.focus();
             const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
             setter?.call(el, '');
             el.dispatchEvent(new Event('input', { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
-        }, selector).catch(() => {});
+        }, input).catch(() => {});
 
         this.logInput(logField, password, logTag);
         await input.type(password, { delay: 30 });
 
-        await this.page.evaluate((sel, expected) => {
-            const el = document.querySelector(sel);
+        await this.page.evaluate((el, expected) => {
             if (!el) return false;
             return el.value === expected;
-        }, selector, password).catch(() => false);
+        }, input, password).catch(() => false);
 
         await SLEEP(300);
         return input;
+    }
+
+    async fillPasswordInput(selector, password, logField, logTag) {
+        const input = await this.page.$(selector);
+        if (!input) {
+            throw new Error(`未找到密码输入框: ${selector}`);
+        }
+        return this.fillPasswordElement(input, password, logField, logTag);
     }
 
     async detectCredentialError(tag = '[OAuth]') {
@@ -598,6 +691,10 @@ class BrowserService {
      * 导航到注册页面：chatgpt.com → 过 CF → 等页面渲染 → 点免费注册 → 点手机登录
      */
     async navigateToSignup() {
+        if (this.browserOptions.clearChatGptSession) {
+            await this.clearChatGptSession();
+        }
+
         console.log('[Browser] 导航到 chatgpt.com...');
         await this.page.goto('https://chatgpt.com', {
             waitUntil: 'domcontentloaded',
@@ -638,7 +735,13 @@ class BrowserService {
         await SLEEP(1000);
 
         console.log('[Browser] 点击「继续使用手机登录」...');
-        await this.clickButtonByText(['手机登录', 'Continue with phone'], 10000);
+        await this.clickButtonByText([
+            '使用电话号码继续',
+            '继续使用手机登录',
+            '手机登录',
+            'Continue with phone number',
+            'Continue with phone',
+        ], 10000);
 
         // 等待手机号输入框出现
         console.log('[Browser] 等待手机号输入框...');
@@ -1004,6 +1107,17 @@ class BrowserService {
                 await this.throwPhoneConflictError(phoneConflict, '[Phase1]');
             }
 
+            const accountCreateFailed =
+                url.includes('/auth/error') ||
+                /创建帐户失败|创建账户失败|failed to create account|couldn'?t create/i.test(text);
+            if (accountCreateFailed) {
+                await this.screenshot('account-create-failed.png').catch(() => {});
+                const err = new Error(`创建账号失败，页面停在: ${url}`);
+                err.code = 'ACCOUNT_CREATE_FAILED';
+                err.shouldCancelActivation = true;
+                throw err;
+            }
+
             // 如果页面没变化，跳过（防止重复操作）
             if (url === lastHandledUrl && !isPasswordPage) {
                 console.log(`[Browser] Round ${round}: 页面未变化，等待...`);
@@ -1043,11 +1157,18 @@ class BrowserService {
                 }
 
                 console.log('[Browser] 填写密码...');
-                const pwdInput = await this.page.$('input[type="password"]');
-                if (!pwdInput) {
+                const pwdInputs = await this.page.$$('input[type="password"]');
+                if (pwdInputs.length === 0) {
                     throw new Error('密码页未找到 password 输入框');
                 }
-                await this.fillPasswordInput('input[type="password"]', userData.password, 'register.password', '[Phase1]');
+                for (let index = 0; index < pwdInputs.length; index += 1) {
+                    await this.fillPasswordElement(
+                        pwdInputs[index],
+                        userData.password,
+                        index === 0 ? 'register.password' : `register.password.${index + 1}`,
+                        '[Phase1]'
+                    );
+                }
                 await SLEEP(500);
                 await this.page.keyboard.press('Enter').catch(() => {});
                 await SLEEP(1000);
@@ -1117,17 +1238,47 @@ class BrowserService {
      * 点击页面上的提交按钮（type=submit 的"继续"按钮）
      */
     async clickSubmitButton() {
-        await this.page.evaluate(() => {
-            for (const b of document.querySelectorAll('button[type="submit"], button')) {
-                const text = b.innerText.trim();
-                if (text === '继续' || text === 'Continue' || text === '下一步' || text === 'Next') {
-                    ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(type => {
-                        b.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
-                    });
-                    return;
-                }
+        const result = await this.page.evaluate(() => {
+            const labels = ['继续', 'Continue', '下一步', 'Next', '创建账号', 'Create account', 'Sign up'];
+            const buttons = Array.from(document.querySelectorAll('button[type="submit"], button, [role="button"]'));
+            const isVisible = (el) => {
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            };
+            const isDisabled = (el) => el.disabled || el.getAttribute('aria-disabled') === 'true';
+            const candidates = buttons.filter(el => isVisible(el) && !isDisabled(el));
+            const target =
+                candidates.find(el => labels.includes((el.innerText || el.textContent || '').trim())) ||
+                candidates.find(el => el.matches('button[type="submit"]')) ||
+                candidates[0];
+
+            if (!target) {
+                return {
+                    clicked: false,
+                    buttons: buttons.slice(0, 10).map(el => ({
+                        text: (el.innerText || el.textContent || '').trim(),
+                        disabled: isDisabled(el),
+                        visible: isVisible(el),
+                    })),
+                };
             }
+
+            target.scrollIntoView({ block: 'center', inline: 'center' });
+            ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(type => {
+                target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+            });
+            target.click?.();
+            return {
+                clicked: true,
+                text: (target.innerText || target.textContent || '').trim(),
+            };
         });
+
+        if (result?.clicked) {
+            console.log(`[Browser] 点击提交按钮: ${result.text || '(no text)'}`);
+        } else {
+            console.log(`[Browser] 未找到可点击提交按钮: ${JSON.stringify(result?.buttons || [])}`);
+        }
         await SLEEP(3000);
     }
 
@@ -1181,7 +1332,13 @@ class BrowserService {
         await this.waitForTextOnPage('登录或注册', 15000);
         await SLEEP(1000);
         console.log('[Phase1.5] 点击「继续使用手机登录」...');
-        await this.clickButtonByText('手机登录', 10000);
+        await this.clickButtonByText([
+            '使用电话号码继续',
+            '继续使用手机登录',
+            '手机登录',
+            'Continue with phone number',
+            'Continue with phone',
+        ], 10000);
 
         // 4. 输入手机号
         await this.waitFor('input[name="phoneNumberInput"]', 15000);
@@ -1425,7 +1582,8 @@ class BrowserService {
             console.log(`[OAuth]   按钮: ${pageInfo.btns.slice(0, 8).join(', ')}`);
 
             // 1. 登录/注册选择页 - 根据配置选择登录方式
-            const hasPhoneLogin = pageInfo.btns.some(b => b.includes('手机登录'));
+            const phoneLoginTexts = ['使用电话号码继续', '继续使用手机登录', '手机登录', 'Continue with phone number', 'Continue with phone'];
+            const hasPhoneLogin = pageInfo.btns.some(b => phoneLoginTexts.some(text => b.includes(text)));
             const hasEmailLogin = pageInfo.btns.some(b => b.includes('电子邮件地址登录') || b.includes('邮箱登录') || b.includes('email'));
             if (loginMethod === 'email' && hasEmailLogin) {
                 console.log('[OAuth] 点击「继续使用电子邮件地址登录」...');
@@ -1442,7 +1600,7 @@ class BrowserService {
             }
             if (loginMethod !== 'email' && hasPhoneLogin) {
                 console.log('[OAuth] 点击「继续使用手机登录」...');
-                await this.clickButtonByText('手机登录');
+                await this.clickButtonByText(phoneLoginTexts);
                 await SLEEP(3000);
                 lastHandledUrl = url;
                 continue;

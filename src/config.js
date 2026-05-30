@@ -50,6 +50,24 @@ function parseBoolean(value, defaultValue) {
     return defaultValue;
 }
 
+function parseProxyUrl(value = '') {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+    try {
+        const url = new URL(raw);
+        if (!url.hostname) return null;
+        const defaultPort = url.protocol === 'https:' ? 443 : 80;
+        return {
+            host: url.hostname,
+            port: parseInt(url.port, 10) || defaultPort,
+            username: decodeURIComponent(url.username || ''),
+            password: decodeURIComponent(url.password || ''),
+        };
+    } catch (error) {
+        return null;
+    }
+}
+
 function normalizeMailDomains(domains, fallback = '') {
     const list = Array.isArray(domains) ? domains : [];
     const normalized = list
@@ -60,6 +78,12 @@ function normalizeMailDomains(domains, fallback = '') {
 
     const single = String(fallback || '').trim().replace(/^@/, '');
     return single ? [single] : [];
+}
+
+function resolveProjectPath(value = '') {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    return path.isAbsolute(raw) ? raw : path.resolve(rootDir, raw);
 }
 
 // 读取配置文件：基础 config.json + 环境覆盖文件
@@ -83,6 +107,14 @@ function loadConfig() {
 }
 
 const config = loadConfig();
+const envProxy = parseProxyUrl(
+    process.env.HTTPS_PROXY
+    || process.env.HTTP_PROXY
+    || process.env.ALL_PROXY
+    || process.env.https_proxy
+    || process.env.http_proxy
+    || process.env.all_proxy
+);
 const phoneCountries = normalizePhoneCountries(
     Array.isArray(config.phoneCountries) && config.phoneCountries.length > 0
         ? config.phoneCountries
@@ -110,10 +142,10 @@ module.exports = {
     mailUserType: parseInt(config.mailUserType, 10) || 1,
 
     // 代理
-    proxyHost: config.proxyHost || '',
-    proxyPort: parseInt(config.proxyPort, 10) || 0,
-    proxyUsername: config.proxyUsername || '',
-    proxyPassword: config.proxyPassword || '',
+    proxyHost: config.proxyHost || envProxy?.host || '',
+    proxyPort: parseInt(config.proxyPort, 10) || envProxy?.port || 0,
+    proxyUsername: config.proxyUsername || envProxy?.username || '',
+    proxyPassword: config.proxyPassword || envProxy?.password || '',
 
     // OAuth
     oauthClientId: config.oauthClientId || 'app_EMoamEEZ73f0CkXaXp7hrann',
@@ -126,6 +158,9 @@ module.exports = {
     // 浏览器
     useChrome: config.useChrome !== false,
     chromePath: config.chromePath || 'google-chrome-stable',
+    browserUserDataDir: resolveProjectPath(config.browserUserDataDir || ''),
+    browserIncognito: parseBoolean(config.browserIncognito, true),
+    browserClearChatGptSession: parseBoolean(config.browserClearChatGptSession, false),
 
     // 手机国家
     phoneCountryCode: String(config.phoneCountryCode || 'GB').trim().toUpperCase(),

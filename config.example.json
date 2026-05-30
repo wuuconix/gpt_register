@@ -56,7 +56,9 @@
     { "isoCode": "NG", "dialCode": "234", "name": "尼日利亚" }
   ],
   "mailBaseUrl": "https://your-mail-site.example.com/",
+  "mailProvider": "cloud-mail",
   "mailAdminPassword": "YOUR_MAIL_ADMIN_PASSWORD",
+  "mailAdminToken": "",
   "mailSitePassword": "",
   "mailDomain": "your-domain.example.com",
   "mailDomains": ["your-domain.example.com", "your-other-domain.example.com"],

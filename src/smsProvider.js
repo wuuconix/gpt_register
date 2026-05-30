@@ -19,6 +19,26 @@ class SMSProvider {
         return response.data;
     }
 
+    isRetryableHttpError(error) {
+        const status = Number(error?.response?.status || 0);
+        return status >= 500 || ['ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED'].includes(error?.code);
+    }
+
+    async setStatusWithRetry(status, label, maxRetries = 3) {
+        for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+            try {
+                return await this.request('setStatus', { id: this.activationId, status });
+            } catch (error) {
+                if (!this.isRetryableHttpError(error) || attempt >= maxRetries) {
+                    throw error;
+                }
+                console.log(`[SMS] ${label}失败: ${error.message}，5秒后重试... (${attempt}/${maxRetries})`);
+                await new Promise(r => setTimeout(r, 5000));
+            }
+        }
+        return null;
+    }
+
     parseNumber(value) {
         const num = Number.parseFloat(String(value ?? '').replace(/[^0-9.]+/g, ''));
         return Number.isFinite(num) ? num : null;
@@ -451,7 +471,7 @@ class SMSProvider {
      * 标记准备接收短信
      */
     async markReady() {
-        await this.request('setStatus', { id: this.activationId, status: 1 });
+        await this.setStatusWithRetry(1, '标记准备接收短信');
         console.log('[SMS] 已标记为准备接收短信');
     }
 
@@ -529,7 +549,7 @@ class SMSProvider {
      * 完成激活（确认已收到验证码）
      */
     async complete() {
-        await this.request('setStatus', { id: this.activationId, status: 6 });
+        await this.setStatusWithRetry(6, '完成激活');
         console.log('[SMS] 激活已完成');
     }
 
@@ -538,7 +558,7 @@ class SMSProvider {
      */
     async cancel() {
         try {
-            await this.request('setStatus', { id: this.activationId, status: 8 });
+            await this.setStatusWithRetry(8, '取消激活');
             console.log('[SMS] 激活已取消（退款）');
         } catch (error) {
             // 409 = EARLY_CANCEL_DENIED（刚创建的号码不能立即取消）

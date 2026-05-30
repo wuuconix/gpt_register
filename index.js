@@ -30,6 +30,7 @@ const SMS_MAX_WAIT_MS = 3 * 60 * 1000;
 const SMS_MAX_ATTEMPTS = Math.ceil(SMS_MAX_WAIT_MS / SMS_POLL_INTERVAL); // 3 min
 const PHASE8_ACCOUNT_DELAY_MS = 60 * 1000;
 const MAIL_PROVIDER = String(config.mailProvider || '').toLowerCase();
+const TOKEN_AUTH_MAIL_PROVIDERS = new Set(['cloud-mail', 'cloudflare-worker']);
 let SELECTED_PHONE_COUNTRY = null;
 let SELECTED_SMS_OPERATOR = '';
 const SMS_OPERATOR_SELECTION_THRESHOLD = 20;
@@ -1061,6 +1062,9 @@ async function phase1(smsProvider, browserService, userData, phoneCountry) {
             await smsProvider.cancel();
         } else if (isSmsActivationClosed) {
             console.error('[阶段1] 本轮短信激活已结束，不再调用 complete，直接进入下一轮');
+        } else if (error?.shouldCancelActivation) {
+            console.error('[阶段1] 注册失败，取消号码退款...');
+            await smsProvider.cancel();
         } else {
             await smsProvider.complete().catch(() => {});
         }
@@ -1528,9 +1532,9 @@ async function startPhase8() {
     if (!config.mailBaseUrl || getConfiguredMailDomains().length === 0) {
         throw new Error('Phase8 requires mailBaseUrl and mailDomain/mailDomains in config');
     }
-    if (MAIL_PROVIDER === 'cloud-mail') {
+    if (TOKEN_AUTH_MAIL_PROVIDERS.has(MAIL_PROVIDER)) {
         if (!config.mailAdminToken && !config.mailAdminPassword) {
-            throw new Error('Phase8 cloud-mail requires mailAdminToken or mailAdminPassword');
+            throw new Error(`Phase8 ${MAIL_PROVIDER} requires mailAdminToken or mailAdminPassword`);
         }
     } else if (!config.mailAdminPassword) {
         throw new Error('Phase8 legacy mail provider requires mailAdminPassword');
@@ -1577,9 +1581,9 @@ async function startPhase3Only() {
     if (!config.mailBaseUrl || getConfiguredMailDomains().length === 0) {
         throw new Error('Phase3 requires mailBaseUrl and mailDomain/mailDomains in config');
     }
-    if (MAIL_PROVIDER === 'cloud-mail') {
+    if (TOKEN_AUTH_MAIL_PROVIDERS.has(MAIL_PROVIDER)) {
         if (!config.mailAdminToken && !config.mailAdminPassword) {
-            throw new Error('Phase3 cloud-mail requires mailAdminToken or mailAdminPassword');
+            throw new Error(`Phase3 ${MAIL_PROVIDER} requires mailAdminToken or mailAdminPassword`);
         }
     } else if (!config.mailAdminPassword) {
         throw new Error('Phase3 legacy mail provider requires mailAdminPassword');
@@ -1633,9 +1637,9 @@ async function startBatch() {
         console.error('[错误] 未配置 mailDomain 或 mailDomains');
         process.exit(1);
     }
-    if (MAIL_PROVIDER === 'cloud-mail') {
+    if (TOKEN_AUTH_MAIL_PROVIDERS.has(MAIL_PROVIDER)) {
         if (!config.mailAdminToken && !config.mailAdminPassword) {
-            console.error('[错误] cloud-mail 需要配置 mailAdminToken 或 mailAdminPassword');
+            console.error(`[错误] ${MAIL_PROVIDER} 需要配置 mailAdminToken 或 mailAdminPassword`);
             process.exit(1);
         }
     } else if (!config.mailAdminPassword) {
