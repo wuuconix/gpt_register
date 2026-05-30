@@ -71,5 +71,8 @@
     "tokens"
   ],
   "useChrome": true,
-  "chromePath": "/path/to/your/browser"
+  "chromePath": "/path/to/your/browser",
+  "browserUserDataDir": "browser-profile",
+  "browserIncognito": false,
+  "browserClearChatGptSession": true
 }
