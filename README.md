@@ -1,248 +1,246 @@
-# Codex 注册流程脚本（当前版本）
+# codex-remote-registrar
 
-本项目当前实现不是 DDG + Browserbase 方案，而是：
+本项目是一个基于本地浏览器的注册流程自动化脚本，用于串联手机号接码、临时邮箱、OpenAI OAuth 授权和 token 文件保存等步骤。
 
-- 本地 `puppeteer-real-browser` 自动化浏览器
-- HeroSMS 接码（手机号）
-- cloud-mail / 兼容 API 邮箱服务（默认按 cloud-mail 协议）
-- OpenAI OAuth 授权换取 Token
+> 详细的逐步部署和运行说明见 [使用说明.md](./使用说明.md)。
 
-如果你是按旧 README 配的 `ddgToken/mailInboxUrl`，会直接跑不通。
+## Features
 
-## 运行前提
+- 使用 `puppeteer-real-browser` 启动本地浏览器自动化流程
+- 使用 HeroSMS 获取手机号、轮询短信验证码并结束激活
+- 支持按国家价格排序选择手机号国家
+- 支持 `cloud-mail`、`legacy` 和 `cloudflare-worker` 邮箱接口
+- 支持 Cloudflare Email Routing + Worker + D1 作为临时邮箱后端
+- 支持完整流程、分阶段恢复、只补 token、批量补 token
+- 支持代理、浏览器持久化 profile、运行时清理 ChatGPT 登录状态
+- 支持把 token 输出到一个或多个目录
 
-- Node.js 18+
+## Requirements
+
+- Node.js 18 或更高版本
 - 可用的 HeroSMS API Key
-- 可用的邮箱服务（默认 cloud-mail 协议）
-- 能启动图形浏览器的环境
+- 可用的临时邮箱服务
+- 可启动图形浏览器的运行环境
 
-注意：
-- Linux 下禁止通过 `xvfb-run` 启动，脚本会主动报错退出
-- `config.json` 必须是严格 JSON，不能写 `//` 注释
+Linux 环境不要使用 `xvfb-run` 启动，本项目会主动检测并退出。
 
-## 安装
+## Installation
 
 ```bash
 npm install
 ```
 
-## 配置
+首次使用建议从示例配置复制一份本地配置：
 
-编辑 `config.json`（示例）：
+```bash
+cp config.example.json config.json
+```
+
+`config.json` 必须是严格 JSON，不能写 `//` 注释。
+
+## Configuration
+
+项目会读取基础配置和环境覆盖配置：
+
+| 文件 | 说明 |
+| --- | --- |
+| `config.json` | 基础配置 |
+| `config.local.json` | macOS 默认覆盖配置 |
+| `config.server.json` | Linux 默认覆盖配置 |
+| `config.example.json` | 示例配置，不应填真实密钥 |
+
+也可以手动指定配置：
+
+```bash
+CONFIG_PROFILE=server node index.js 1
+CONFIG_PROFILE=local node index.js 1
+CONFIG_FILE=./config.server.json node index.js 1
+```
+
+最小配置示例：
 
 ```json
 {
   "heroSmsApiKey": "YOUR_HEROSMS_API_KEY",
   "heroSmsService": "dr",
-  "heroSmsCountry": 16,
+  "heroSmsCountry": 46,
   "heroSmsPromptCountrySelection": true,
   "heroSmsCountryTopN": 10,
-  "phoneCountryCode": "GB",
-  "mailBaseUrl": "https://your-mail-site.example.com",
-  "mailProvider": "cloud-mail",
-  "mailAdminEmail": "admin@example.com",
-  "mailAdminPassword": "YOUR_ADMIN_PASSWORD",
-  "mailAdminToken": "",
-  "mailUserType": 1,
-  "mailSitePassword": "",
+  "phoneCountryCode": "SE",
+  "mailProvider": "cloudflare-worker",
+  "mailBaseUrl": "https://your-worker.your-subdomain.workers.dev",
+  "mailAdminToken": "YOUR_MAIL_API_TOKEN",
   "mailDomain": "your-domain.example.com",
-  "mailDomains": ["your-domain.example.com", "your-other-domain.example.com"],
-  "proxyHost": "",
-  "proxyPort": 0,
-  "proxyUsername": "",
-  "proxyPassword": "",
-  "tokenOutputDir": "tokens",
-  "tokenOutputDirs": ["tokens"]
+  "mailDomains": ["your-domain.example.com"],
+  "tokenOutputDirs": ["tokens"],
+  "browserUserDataDir": "browser-profile",
+  "browserIncognito": false,
+  "browserClearChatGptSession": true
 }
 ```
 
-另外现在支持环境覆盖文件：
+常用字段：
 
-- `config.json`：共用基础配置
-- `config.local.json`：本地 macOS 覆盖配置
-- `config.server.json`：Linux / 服务器覆盖配置
+| 字段 | 说明 |
+| --- | --- |
+| `heroSmsApiKey` | HeroSMS API Key |
+| `heroSmsService` | HeroSMS 服务代码，默认 `dr` |
+| `heroSmsCountry` | HeroSMS 国家 ID，作为默认或兜底国家 |
+| `heroSmsPromptCountrySelection` | 启动时是否交互选择低价国家 |
+| `heroSmsCountryTopN` | 展示低价国家数量 |
+| `phoneCountryCode` | 手机国家 ISO 代码，例如 `SE`、`US`、`GB` |
+| `phoneCountries` | 自定义国家清单，不填时使用内置清单 |
+| `mailProvider` | 邮箱接口类型：`cloud-mail`、`legacy`、`cloudflare-worker`、`auto` |
+| `mailBaseUrl` | 邮箱服务根地址 |
+| `mailAdminEmail` | `cloud-mail` 管理员邮箱 |
+| `mailAdminPassword` | `cloud-mail` 管理员密码或旧接口 admin key |
+| `mailAdminToken` | 邮箱接口 token；配置后优先使用 |
+| `mailDomain` | 默认邮箱域名 |
+| `mailDomains` | 邮箱域名池 |
+| `proxyHost` / `proxyPort` | 浏览器和 OAuth 请求代理 |
+| `proxyUsername` / `proxyPassword` | 代理认证信息 |
+| `tokenOutputDir` | 单个 token 输出目录 |
+| `tokenOutputDirs` | 多个 token 输出目录，优先级高于 `tokenOutputDir` |
+| `browserUserDataDir` | 浏览器持久化 profile 目录 |
+| `browserIncognito` | 是否使用无痕上下文 |
+| `browserClearChatGptSession` | 启动时是否清理 ChatGPT 登录状态 |
 
-加载规则：
+代理也可以通过 `HTTP_PROXY`、`HTTPS_PROXY` 或 `ALL_PROXY` 环境变量提供。
 
-- macOS 默认叠加 `config.local.json`
-- Linux 默认叠加 `config.server.json`
-- 也可以手动指定：
+## Cloudflare Email Worker
 
-```bash
-CONFIG_PROFILE=local node index.js 1
-CONFIG_PROFILE=server node index.js 1
-CONFIG_FILE=./config.local.json node index.js 1
-```
+如果使用 Cloudflare Email Routing 作为临时邮箱后端，项目已包含 Worker 和 D1 表结构：
 
-### 配置字段说明
+- [cloudflare-email-worker.js](./cloudflare-email-worker.js)
+- [cloudflare-email-worker-schema.sql](./cloudflare-email-worker-schema.sql)
 
-| 字段 | 说明 | 必填 |
-|---|---|---|
-| `heroSmsApiKey` | HeroSMS 的 API Key | 是 |
-| `heroSmsService` | HeroSMS 服务代码，默认 `dr` | 否 |
-| `heroSmsCountry` | 默认 HeroSMS 国家 ID，价格查询失败时的兜底值 | 否 |
-| `heroSmsPromptCountrySelection` | 启动时是否先展示最便宜国家前 N 名并交互选择 | 否 |
-| `heroSmsCountryTopN` | 价格列表展示前几名，默认 `10` | 否 |
-| `phoneCountryCode` | 默认手机国家 ISO 代码，例如 `GB` / `US` | 否 |
-| `phoneCountries` | 可参与比价与匹配的国家清单；未填时使用内置常见国家列表 | 否 |
-| `mailBaseUrl` | 邮箱服务根地址 | 是 |
-| `mailProvider` | 邮箱协议，默认 `cloud-mail`；支持 `cloud-mail` / `legacy` / `cloudflare-worker` | 否 |
-| `mailAdminEmail` | cloud-mail 管理员登录邮箱（可不填：会尝试用 `mailAdminPassword` 作为邮箱） | 建议填 |
-| `mailAdminPassword` | cloud-mail 管理员登录密码（或 legacy 的 admin key） | 是 |
-| `mailAdminToken` | cloud-mail 管理员 token，填了就不再走 `/api/login` | 否 |
-| `mailUserType` | cloud-mail 新建邮箱用户角色 ID，默认 `1` | 否 |
-| `mailSitePassword` | legacy 协议二次鉴权（`x-custom-auth`） | 否 |
-| `mailDomain` | 单个邮箱域名；作为兼容旧配置的兜底值 | 否 |
-| `mailDomains` | 多域名池；每一轮创建邮箱前会随机选一个域名 | 建议填 |
-| `proxyHost/proxyPort/proxyUsername/proxyPassword` | 浏览器和 OAuth 请求代理（可选） | 否 |
-| `tokenOutputDir` | 单目录输出 token | 否 |
-| `tokenOutputDirs` | 多目录输出 token，配置后优先于 `tokenOutputDir` | 否 |
+部署步骤概览：
 
-### Cloudflare Email Routing
-
-如果使用 Cloudflare Email Routing + Email Worker：
-
-1. 部署 `cloudflare-email-worker.js` 到 Cloudflare Worker。
+1. 在 Cloudflare 创建 Worker。
 2. 创建 D1 数据库并执行 `cloudflare-email-worker-schema.sql`。
 3. 给 Worker 绑定 D1，绑定名必须是 `DB`。
 4. 设置 Worker 环境变量：
-   - `MAIL_API_TOKEN`：本脚本查询邮件用的密钥
+   - `MAIL_API_TOKEN`：本项目查询邮件时使用的密钥
    - `MAIL_DOMAIN`：你的收信域名
 5. 在 Email Routing 的 catch-all 规则中选择 `Send to Worker`。
-6. 配置本项目：
+6. 在本项目配置 `mailProvider`、`mailBaseUrl`、`mailAdminToken` 和域名。
 
-```json
-{
-  "mailProvider": "cloudflare-worker",
-  "mailBaseUrl": "https://your-worker.your-subdomain.workers.dev",
-  "mailAdminToken": "same-as-MAIL_API_TOKEN",
-  "mailDomain": "your-domain.example.com",
-  "mailDomains": ["your-domain.example.com"]
-}
-```
+## Usage
 
-## 启动方式
-
-### 1) 完整流程（默认）
+完整流程，产出 1 个 token：
 
 ```bash
 node index.js 1
 ```
 
-含义：跑一轮完整链路，直到产出 1 个 token 文件。  
-你也可以批量：
+批量产出多个 token：
 
 ```bash
 node index.js 5
 ```
 
-完整流程启动前会先尝试：
-
-1. 从 HeroSMS 拉取国家列表与服务价格
-2. 按价格从低到高列出前 `heroSmsCountryTopN` 个国家
-3. 等你输入序号 / ISO / HeroSMS 国家 ID
-4. 如果该国家聚合库存较低（当前阈值 `< 20`），再列出运营商 / 聚合库存供你二次选择
-5. 再用你选中的国家与运营商继续后面的注册流程
-
-也可以跳过交互，直接指定国家：
+指定国家：
 
 ```bash
-node index.js 1 --country=US
+node index.js 1 --country=SE
 ```
 
-如果当前不是交互终端，脚本会自动回退到 `phoneCountryCode` 对应国家。
-
-### 2) 只跑已注册账号的 OAuth（`--phase2`）
-
-```bash
-node index.js --phase2
-```
-
-前提：`accounts.json` 内存在可恢复账号。
-启动后会按创建时间倒序列出候选账号（手机号 / 时间 / 状态 / 国家 / 姓名），让你交互式选择要继续绑定邮箱的那一条。
-该模式只执行到邮箱绑定完成，不会继续换 token。
-
-### 2.5) 新注册但停在 Phase 2 收尾（`--stop-after-phase2`）
+新注册并停在 Phase 2 收尾：
 
 ```bash
 node index.js 1 --stop-after-phase2
 ```
 
-作用：正常注册手机号并绑定临时邮箱，但在 Phase 2 邮箱绑定完成后停止。
-适合需要停在“账号已注册 + 邮箱已绑定，但还没换 token”的状态继续开发。
+使用已注册账号继续跑邮箱绑定：
 
-### 3) 只补最后一步 Token（`--phase3`）
+```bash
+node index.js --phase2
+```
+
+只补最后一步 token：
 
 ```bash
 node index.js --phase3
 ```
 
-作用：只执行“邮箱登录 OAuth 并换取 token”这最后一步。  
-适合前面的手机号注册、邮箱绑定都已经成功，但最后 token 没拿到时单独补跑。
-
-启动后会按时间倒序列出 `username.json` 里的候选记录（邮箱 / 手机号 / 时间 / 状态），让你交互式选择要补 token 的那一条。
-
-它会：
-
-1. 读取 `username.json` 最新一条记录
-2. 用该记录里的邮箱重新走邮箱 OTP / OAuth
-3. 换取并保存 token
-
-它不会：
-
-- 重新注册手机号
-- 重新绑定邮箱
-- 重跑完整三阶段流程
-
-### 4) 按 `username.json` 批量补 Token（`--phase8`）
+按 `username.json` 批量补 token：
 
 ```bash
 node index.js --phase8
 ```
 
-用于对已有邮箱账号进行邮箱 OTP 登录并批量换 token。失败记录会追加到 `shibai.json`。
+## Workflow
 
-## 实际执行流程（默认模式）
+默认完整流程分为四段：
 
-1. Phase 1：手机号注册 ChatGPT（含 SMS 验证）
-2. Phase 1.5：首次登录补全 about-you
-3. Phase 2：绑定临时邮箱
-4. Phase 3：邮箱登录 OAuth，换取并保存 token
+| 阶段 | 说明 |
+| --- | --- |
+| Phase 1 | 手机号注册并完成短信验证 |
+| Phase 1.5 | 首次登录后补全 about-you |
+| Phase 2 | 绑定临时邮箱 |
+| Phase 3 | 邮箱登录 OAuth，换取并保存 token |
 
-## 产物文件
+`--stop-after-phase2` 会在 Phase 2 邮箱绑定完成后停止，不进入 Phase 3。
 
-| 文件 | 作用 |
-|---|---|
-| `accounts.json` | 手机号注册账号池，含状态（`registered` / `oauth_done`） |
-| `username.json` | 已绑定邮箱账号池（供 phase8 使用） |
-| `tokens/codex-<email>-free.json` | 最终 token 文件 |
-| `shibai.json` | phase8 失败账号记录 |
+## Output Files
 
-## 常见问题
+| 路径 | 说明 |
+| --- | --- |
+| `accounts.json` | 手机号注册账号池 |
+| `username.json` | 已绑定邮箱账号池 |
+| `tokens/codex-<email>-free.json` | 生成的 token 文件 |
+| `shibai.json` | 批量补 token 失败记录 |
+| `logs/` | 运行日志 |
+| `browser-profile/` | 浏览器持久化 profile，启用时产生 |
 
-### 1. 启动就报配置解析失败
+这些文件通常包含账号、token、浏览器会话或运行状态，不建议提交到公开仓库。
 
-`config.json` 含注释或格式错误。请用严格 JSON。
+## Project Structure
 
-### 2. 提示未配置 `heroSmsApiKey`
+```text
+.
+├── index.js
+├── src/
+│   ├── browserService.js
+│   ├── config.js
+│   ├── mailProvider.js
+│   ├── smsProvider.js
+│   └── tokenExchange.js
+├── cloudflare-email-worker.js
+├── cloudflare-email-worker-schema.sql
+├── config.example.json
+├── package.json
+└── 使用说明.md
+```
 
-`config.json` 未填写或读取失败。
+## Troubleshooting
 
-### 3. 代理失败
+### 配置解析失败
 
-脚本会检测代理连接错误并自动回退直连重试当前轮。
+检查 `config.json` 是否为严格 JSON。不要写注释、尾逗号或未转义字符。
 
-### 4. `--phase2` 报没有可用账号
+### 提示缺少 HeroSMS API Key
 
-先跑 `node index.js 1` 生成 `accounts.json` 记录。
+检查当前实际加载的是哪个配置文件。Linux 默认会叠加 `config.server.json`，macOS 默认会叠加 `config.local.json`。
 
-### 5. cloud-mail 提示认证失效 / 401
+### 邮箱接口 401 或认证失败
 
-优先检查：
-1. `mailAdminEmail` / `mailAdminPassword` 是否正确
-2. `mailAdminToken` 是否过期（若填写了）
-3. `mailDomain` 是否为可用域名（例如 `raven97.xyz`，不要写错）
+检查 `mailProvider` 是否和实际服务一致，并确认 `mailAdminEmail`、`mailAdminPassword`、`mailAdminToken`、`mailDomain` 配置正确。
 
-## 备注
+### 代理不可用
 
-当前代码中 `oauthClientId/oauthRedirectPort/useChrome/chromePath` 虽有配置导出，但主流程未使用这些配置值，不建议依赖它们。
+脚本会在代理连接失败时尝试回退直连。需要固定走代理时，请确认代理主机、端口和认证信息有效。
+
+### `--phase2` 找不到账号
+
+先运行完整注册流程，或确认 `accounts.json` 内存在可恢复记录。
+
+## Security
+
+- 不要把真实 API Key、邮箱密钥、账号文件、token 文件提交到公开仓库。
+- 不要把 `browser-profile/` 作为可共享产物，它可能包含登录状态。
+- 建议把生产配置放在本地覆盖配置文件中，只把 `config.example.json` 作为公开示例。
+
+## License
+
+ISC
