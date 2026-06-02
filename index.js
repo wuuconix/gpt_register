@@ -27,8 +27,8 @@ const USERNAME_FILE = path.join(process.cwd(), 'username.json');
 const SHIBAI_FILE = path.join(process.cwd(), 'shibai.json');
 const TOKEN_OUTPUT_DIR = config.tokenOutputDir || path.join(process.cwd(), 'tokens');
 const SMS_POLL_INTERVAL = 5000;
-const SMS_MAX_WAIT_MS = 3 * 60 * 1000;
-const SMS_MAX_ATTEMPTS = Math.ceil(SMS_MAX_WAIT_MS / SMS_POLL_INTERVAL); // 3 min
+const SMS_MAX_WAIT_MS = 1.5 * 60 * 1000;
+const SMS_MAX_ATTEMPTS = Math.ceil(SMS_MAX_WAIT_MS / SMS_POLL_INTERVAL); // 2 min
 const PHASE8_ACCOUNT_DELAY_MS = 60 * 1000;
 const MAIL_PROVIDER = String(config.mailProvider || '').toLowerCase();
 const TOKEN_AUTH_MAIL_PROVIDERS = new Set(['cloud-mail', 'cloudflare-worker']);
@@ -1240,6 +1240,7 @@ async function runSingleRegistration() {
         userType: config.mailUserType,
     });
     const baseProxy = config.proxyHost ? {
+        protocol: config.proxyProtocol,
         host: config.proxyHost,
         port: config.proxyPort,
         username: config.proxyUsername,
@@ -1255,6 +1256,7 @@ async function runSingleRegistration() {
             chromePath: config.chromePath,
         });
         const oauthProxy = proxy ? {
+            protocol: proxy.protocol,
             host: proxy.host,
             port: proxy.port,
             username: proxy.username,
@@ -1430,6 +1432,7 @@ async function runPhase8ForEntry(entry, index, total) {
     });
 
     const baseProxy = config.proxyHost ? {
+        protocol: config.proxyProtocol,
         host: config.proxyHost,
         port: config.proxyPort,
         username: config.proxyUsername,
@@ -1443,6 +1446,7 @@ async function runPhase8ForEntry(entry, index, total) {
             chromePath: config.chromePath,
         });
         const oauthProxy = proxy ? {
+            protocol: proxy.protocol,
             host: proxy.host,
             port: proxy.port,
             username: proxy.username,

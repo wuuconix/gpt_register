@@ -58,6 +58,7 @@ function parseProxyUrl(value = '') {
         if (!url.hostname) return null;
         const defaultPort = url.protocol === 'https:' ? 443 : 80;
         return {
+            protocol: url.protocol,
             host: url.hostname,
             port: parseInt(url.port, 10) || defaultPort,
             username: decodeURIComponent(url.username || ''),
@@ -66,6 +67,21 @@ function parseProxyUrl(value = '') {
     } catch (error) {
         return null;
     }
+}
+
+function normalizeProxyConfig(rawConfig, envProxy) {
+    const hostValue = String(rawConfig.proxyHost || '').trim();
+    const parsedHost = parseProxyUrl(
+        hostValue && hostValue.includes('://') ? hostValue : ''
+    );
+
+    return {
+        protocol: rawConfig.proxyProtocol || parsedHost?.protocol || envProxy?.protocol || 'http:',
+        host: parsedHost?.host || hostValue || envProxy?.host || '',
+        port: parseInt(rawConfig.proxyPort, 10) || parsedHost?.port || envProxy?.port || 0,
+        username: rawConfig.proxyUsername || parsedHost?.username || envProxy?.username || '',
+        password: rawConfig.proxyPassword || parsedHost?.password || envProxy?.password || '',
+    };
 }
 
 function normalizeMailDomains(domains, fallback = '') {
@@ -121,6 +137,7 @@ const phoneCountries = normalizePhoneCountries(
         : DEFAULT_PHONE_COUNTRIES
 );
 const mailDomains = normalizeMailDomains(config.mailDomains, config.mailDomain);
+const proxyConfig = normalizeProxyConfig(config, envProxy);
 
 module.exports = {
     // HeroSMS
@@ -142,10 +159,11 @@ module.exports = {
     mailUserType: parseInt(config.mailUserType, 10) || 1,
 
     // 代理
-    proxyHost: config.proxyHost || envProxy?.host || '',
-    proxyPort: parseInt(config.proxyPort, 10) || envProxy?.port || 0,
-    proxyUsername: config.proxyUsername || envProxy?.username || '',
-    proxyPassword: config.proxyPassword || envProxy?.password || '',
+    proxyProtocol: proxyConfig.protocol,
+    proxyHost: proxyConfig.host,
+    proxyPort: proxyConfig.port,
+    proxyUsername: proxyConfig.username,
+    proxyPassword: proxyConfig.password,
 
     // OAuth
     oauthClientId: config.oauthClientId || 'app_EMoamEEZ73f0CkXaXp7hrann',
