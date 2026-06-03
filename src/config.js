@@ -50,6 +50,12 @@ function parseBoolean(value, defaultValue) {
     return defaultValue;
 }
 
+function parseOptionalPrice(value) {
+    if (value === undefined || value === null || value === '') return null;
+    const num = Number.parseFloat(String(value).trim());
+    return Number.isFinite(num) && num >= 0 ? num : null;
+}
+
 function parseProxyUrl(value = '') {
     const raw = String(value || '').trim();
     if (!raw) return null;
@@ -146,6 +152,8 @@ module.exports = {
     heroSmsCountry: parseInt(config.heroSmsCountry, 10) || 16,
     heroSmsPromptCountrySelection: parseBoolean(config.heroSmsPromptCountrySelection, true),
     heroSmsCountryTopN: parseInt(config.heroSmsCountryTopN, 10) || 10,
+    heroSmsMinPrice: parseOptionalPrice(config.heroSmsMinPrice),
+    heroSmsMaxPrice: parseOptionalPrice(config.heroSmsMaxPrice),
 
     // Cloudflare 临时邮箱
     mailBaseUrl: config.mailBaseUrl || '',
