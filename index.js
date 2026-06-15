@@ -434,42 +434,6 @@ function printOperatorOptionTable(rows, country) {
     });
 }
 
-function getHeroSmsPriceRange() {
-    const min = config.heroSmsMinPrice === null ? null : Number(config.heroSmsMinPrice);
-    const max = config.heroSmsMaxPrice === null ? null : Number(config.heroSmsMaxPrice);
-    const hasMin = min !== null && Number.isFinite(min);
-    const hasMax = max !== null && Number.isFinite(max);
-    return {
-        enabled: hasMin || hasMax,
-        min: hasMin ? min : null,
-        max: hasMax ? max : null,
-    };
-}
-
-function formatHeroSmsPriceRange(range) {
-    const min = range.min === null ? '不限' : `$${range.min.toFixed(4)}`;
-    const max = range.max === null ? '不限' : `$${range.max.toFixed(4)}`;
-    return `${min} ~ ${max}`;
-}
-
-function isHeroSmsPriceInRange(price, range) {
-    const value = Number(price);
-    if (!Number.isFinite(value)) return false;
-    if (range.min !== null && value < range.min) return false;
-    if (range.max !== null && value > range.max) return false;
-    return true;
-}
-
-function pickCheapestHeroSmsOptionInRange(rows, range) {
-    return rows
-        .filter(item => isHeroSmsPriceInRange(item.price, range))
-        .sort((a, b) => {
-            const priceDiff = Number(a.price) - Number(b.price);
-            if (priceDiff !== 0) return priceDiff;
-            return Number(b.count || 0) - Number(a.count || 0);
-        })[0] || null;
-}
-
 async function promptUserToChooseCountry(rows, defaultCountry) {
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
         console.log(`[SMS] 当前不是交互终端，自动使用默认国家: ${defaultCountry.name} (+${defaultCountry.dialCode})`);
@@ -522,10 +486,7 @@ async function promptUserToChooseOperator(rows, defaultOption, country) {
             if (byIndex) return byIndex;
 
             const lowered = answer.toLowerCase();
-            const byName = rows.find(item =>
-                String(item.operator || '').toLowerCase() === lowered
-                || String(item.label || '').toLowerCase() === lowered
-            );
+            const byName = rows.find(item => item.operator.toLowerCase() === lowered || item.label.toLowerCase() === lowered);
             if (byName) return byName;
 
             console.log('[SMS] 运营商选择无效，请重新输入。');
@@ -538,7 +499,6 @@ async function promptUserToChooseOperator(rows, defaultOption, country) {
 async function resolveRunSmsOperator(phoneCountry, options = {}) {
     const { debug = false } = options;
     const smsProvider = new SMSProvider(config.heroSmsApiKey);
-    const priceRange = getHeroSmsPriceRange();
     const countryId = Number(phoneCountry?.heroSmsCountry);
     if (!Number.isFinite(countryId)) {
         return { operator: '', label: '任何运营商', price: phoneCountry?.price ?? null, count: phoneCountry?.count ?? null, note: '国家未绑定 HeroSMS ID，跳过运营商选择' };
@@ -546,7 +506,7 @@ async function resolveRunSmsOperator(phoneCountry, options = {}) {
 
     try {
         const aggregateCount = Number(phoneCountry?.count);
-        if (!priceRange.enabled && Number.isFinite(aggregateCount) && aggregateCount >= SMS_OPERATOR_SELECTION_THRESHOLD) {
+        if (Number.isFinite(aggregateCount) && aggregateCount >= SMS_OPERATOR_SELECTION_THRESHOLD) {
             console.log(`[SMS] ${phoneCountry.name} 当前聚合库存 ${aggregateCount}，不触发二次运营商选择`);
             return {
                 operator: '',
@@ -570,7 +530,7 @@ async function resolveRunSmsOperator(phoneCountry, options = {}) {
             note: '国家聚合库存',
         };
 
-        if (!priceRange.enabled && operatorOptions.length === 0) {
+        if (operatorOptions.length === 0) {
             console.log(`[SMS] ${phoneCountry.name} 未返回运营商列表，使用「任何运营商」`);
             return aggregateOption;
         }
@@ -583,17 +543,6 @@ async function resolveRunSmsOperator(phoneCountry, options = {}) {
                 note: item.error ? `查询失败: ${item.error}` : '运营商聚合库存',
             })),
         ];
-
-        if (priceRange.enabled) {
-            printOperatorOptionTable(rows, phoneCountry);
-            const selected = pickCheapestHeroSmsOptionInRange(rows, priceRange);
-            if (!selected) {
-                throw new Error(`${phoneCountry.name} 没有符合 HeroSMS 价格区间 ${formatHeroSmsPriceRange(priceRange)} 的可用套餐`);
-            }
-            const operatorText = selected.operator ? `运营商 ${selected.label}` : selected.label;
-            console.log(`[SMS] HeroSMS 价格区间 ${formatHeroSmsPriceRange(priceRange)}，自动选择最低价套餐: ${operatorText}，价格 $${Number(selected.price).toFixed(4)}`);
-            return selected;
-        }
 
         console.log(`[SMS] ${phoneCountry.name} 聚合库存 ${Number.isFinite(aggregateCount) ? aggregateCount : '-'}，低于 ${SMS_OPERATOR_SELECTION_THRESHOLD}，进入运营商二次选择`);
         printOperatorOptionTable(rows, phoneCountry);
@@ -609,9 +558,6 @@ async function resolveRunSmsOperator(phoneCountry, options = {}) {
         console.log(`[SMS] 已选择运营商: ${selected.label} (${phoneCountry.name})`);
         return selected;
     } catch (error) {
-        if (priceRange.enabled) {
-            throw new Error(`HeroSMS 价格区间 ${formatHeroSmsPriceRange(priceRange)} 无法满足: ${error.message}`);
-        }
         console.warn(`[SMS] 获取 ${phoneCountry.name} 运营商列表失败，使用「任何运营商」: ${error.message}`);
         return {
             operator: '',
@@ -1709,14 +1655,6 @@ async function startBatch() {
     } else if (!config.mailAdminPassword) {
         console.error('[错误] 未配置 mailAdminPassword');
         process.exit(1);
-    }
-    const heroSmsPriceRange = getHeroSmsPriceRange();
-    if (heroSmsPriceRange.min !== null && heroSmsPriceRange.max !== null && heroSmsPriceRange.min > heroSmsPriceRange.max) {
-        console.error(`[错误] heroSmsMinPrice 不能大于 heroSmsMaxPrice，当前为 ${formatHeroSmsPriceRange(heroSmsPriceRange)}`);
-        process.exit(1);
-    }
-    if (heroSmsPriceRange.enabled) {
-        console.log(`[SMS] 已启用 HeroSMS 价格区间: ${formatHeroSmsPriceRange(heroSmsPriceRange)}`);
     }
 
     if (!PHASE2_ONLY) {

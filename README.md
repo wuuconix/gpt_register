@@ -66,8 +66,6 @@ CONFIG_FILE=./config.server.json node index.js 1
   "heroSmsCountry": 46,
   "heroSmsPromptCountrySelection": true,
   "heroSmsCountryTopN": 10,
-  "heroSmsMinPrice": null,
-  "heroSmsMaxPrice": null,
   "phoneCountryCode": "SE",
   "mailProvider": "cloudflare-worker",
   "mailBaseUrl": "https://your-worker.your-subdomain.workers.dev",
@@ -90,7 +88,6 @@ CONFIG_FILE=./config.server.json node index.js 1
 | `heroSmsCountry` | HeroSMS 国家 ID，作为默认或兜底国家 |
 | `heroSmsPromptCountrySelection` | 启动时是否交互选择低价国家 |
 | `heroSmsCountryTopN` | 展示低价国家数量 |
-| `heroSmsMinPrice` / `heroSmsMaxPrice` | HeroSMS 报价区间；不填或 `null` 表示不限制，启用后会在区间内选择最低价套餐 |
 | `phoneCountryCode` | 手机国家 ISO 代码，例如 `SE`、`US`、`GB` |
 | `phoneCountries` | 自定义国家清单，不填时使用内置清单 |
 | `mailProvider` | 邮箱接口类型：`cloud-mail`、`legacy`、`cloudflare-worker`、`auto` |

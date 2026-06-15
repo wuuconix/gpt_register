@@ -4,8 +4,6 @@
   "heroSmsCountry": 16,
   "heroSmsPromptCountrySelection": true,
   "heroSmsCountryTopN": 10,
-  "heroSmsMinPrice": null,
-  "heroSmsMaxPrice": null,
   "phoneCountryCode": "GB",
   "phoneCountries": [
     { "isoCode": "GB", "dialCode": "44", "name": "英国" },
