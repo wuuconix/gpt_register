@@ -705,7 +705,7 @@ class BrowserService {
 
         // 等待页面完全渲染（兼容中英文首页文案）
         console.log('[Browser] 等待页面渲染...');
-        await this.waitForButtonByText(['免费注册', 'Sign up for free', 'Sign up'], 30000);
+        await this.waitForButtonByText(['免费注册', 'Sign up for free', 'Sign up'], 60000);
         // 额外等待确保 React 事件处理器已绑定
         await SLEEP(5000);
 
@@ -1079,7 +1079,7 @@ class BrowserService {
         console.log('[Browser] 开始填写注册资料...');
         let lastHandledUrl = '';
 
-        for (let round = 0; round < 20; round++) {
+        for (let round = 0; round < 5; round++) {
             await SLEEP(3000);
 
             let pageState;
@@ -1354,7 +1354,7 @@ class BrowserService {
         console.log('[Phase1.5] 开始处理登录后续步骤...');
         let lastHandledUrl = '';
 
-        for (let round = 0; round < 20; round++) {
+        for (let round = 0; round < 10; round++) {
             await SLEEP(3000);
 
             let pageState;
