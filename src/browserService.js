@@ -1,5 +1,6 @@
 const { connect } = require('puppeteer-real-browser');
 const fs = require('fs');
+const path = require('path');
 const config = require('./config');
 const { logInputValue } = require('./runLogger');
 
@@ -57,12 +58,13 @@ class BrowserService {
         }
 
         if (this.browserOptions.userDataDir) {
-            fs.mkdirSync(this.browserOptions.userDataDir, { recursive: true });
+            this.clearUserDataDir();
+            const userDataDir = path.resolve(this.browserOptions.userDataDir);
             connectOptions.customConfig = {
                 ...(connectOptions.customConfig || {}),
-                userDataDir: this.browserOptions.userDataDir,
+                userDataDir,
             };
-            console.log(`[Browser] 使用用户数据目录: ${this.browserOptions.userDataDir}`);
+            console.log(`[Browser] 使用用户数据目录: ${userDataDir}`);
         }
 
         if (this.proxy) {
@@ -102,6 +104,37 @@ class BrowserService {
             });
         });
         console.log('[Browser] 浏览器已启动 (1280x900)');
+    }
+
+    clearUserDataDir() {
+        const userDataDir = path.resolve(this.browserOptions.userDataDir);
+        const rootDir = path.parse(userDataDir).root;
+        const projectRoot = path.resolve(__dirname, '..');
+        const homeDir = process.env.USERPROFILE || process.env.HOME || '';
+        const protectedDirs = new Set([
+            rootDir,
+            projectRoot,
+            path.resolve(process.cwd()),
+            homeDir ? path.resolve(homeDir) : '',
+        ].filter(Boolean));
+
+        if (!userDataDir || protectedDirs.has(userDataDir)) {
+            throw new Error(`拒绝清空危险的浏览器用户数据目录: ${this.browserOptions.userDataDir}`);
+        }
+
+        fs.mkdirSync(userDataDir, { recursive: true });
+
+        const entries = fs.readdirSync(userDataDir);
+        for (const entry of entries) {
+            fs.rmSync(path.join(userDataDir, entry), {
+                recursive: true,
+                force: true,
+                maxRetries: 3,
+                retryDelay: 200,
+            });
+        }
+
+        console.log(`[Browser] 已清空用户数据目录: ${userDataDir}`);
     }
 
     /**
