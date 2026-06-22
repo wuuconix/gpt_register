@@ -91,7 +91,7 @@ class BrowserService {
             targetPage = page;
         }
         this.page = targetPage;
-        await targetPage.setViewport({ width: 1280, height: 900 });
+        await targetPage.setViewport({ width: 1880, height: 900 });
         await targetPage.setExtraHTTPHeaders({
             'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
         });
@@ -103,7 +103,7 @@ class BrowserService {
                 get: () => ['zh-CN', 'zh', 'en-US', 'en'],
             });
         });
-        console.log('[Browser] 浏览器已启动 (1280x900)');
+        console.log('[Browser] 浏览器已启动 (1880x900)');
     }
 
     clearUserDataDir() {
