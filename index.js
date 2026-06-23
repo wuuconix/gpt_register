@@ -24,6 +24,7 @@ const COUNTRY_ARG = (args.find(a => a.startsWith('--country=')) || '').split('='
 const TARGET_COUNT = parseInt(args.find(a => /^\d+$/.test(a)) || '1', 10);
 const ACCOUNTS_FILE = path.join(process.cwd(), 'accounts.json');
 const USERNAME_FILE = path.join(process.cwd(), 'username.json');
+const PHASE8_ACCOUNT_LIST_FILE = path.join(process.cwd(), 'phase8_accounts.txt');
 const SHIBAI_FILE = path.join(process.cwd(), 'shibai.json');
 const TOKEN_OUTPUT_DIR = config.tokenOutputDir || path.join(process.cwd(), 'tokens');
 const SMS_POLL_INTERVAL = 5000;
@@ -732,6 +733,76 @@ async function runSmsCountryDebug() {
 
 function getUsernameRecords() {
     return readJsonArray(USERNAME_FILE);
+}
+
+function readPhase8AccountEmails() {
+    if (!fs.existsSync(PHASE8_ACCOUNT_LIST_FILE)) {
+        throw new Error(`Phase8 account list not found: ${path.basename(PHASE8_ACCOUNT_LIST_FILE)}. Please create it with one email per line.`);
+    }
+
+    const seen = new Set();
+    const emails = [];
+    const content = fs.readFileSync(PHASE8_ACCOUNT_LIST_FILE, 'utf8').replace(/^\uFEFF/, '');
+    for (const rawLine of content.split(/\r?\n/)) {
+        const email = rawLine.trim();
+        if (!email || email.startsWith('#')) continue;
+
+        const key = email.toLowerCase();
+        if (seen.has(key)) continue;
+
+        seen.add(key);
+        emails.push(email);
+    }
+
+    return emails;
+}
+
+function getPhase8TargetEntries() {
+    const emails = readPhase8AccountEmails();
+    if (emails.length === 0) {
+        throw new Error(`Phase8 account list is empty: ${path.basename(PHASE8_ACCOUNT_LIST_FILE)}`);
+    }
+
+    const records = getUsernameRecords();
+    if (records.length === 0) {
+        throw new Error('username.json is empty');
+    }
+
+    const recordByEmail = new Map();
+    for (const record of records) {
+        const key = String(record?.email || '').trim().toLowerCase();
+        if (key) recordByEmail.set(key, record);
+    }
+
+    const matched = [];
+    const missing = [];
+    const missingPassword = [];
+    for (const email of emails) {
+        const record = recordByEmail.get(email.toLowerCase());
+        if (!record) {
+            missing.push(email);
+            continue;
+        }
+        if (!String(record?.password || '').trim()) {
+            missingPassword.push(email);
+            continue;
+        }
+        matched.push(record);
+    }
+
+    if (missing.length > 0) {
+        console.warn(`[Phase8] ${missing.length} email(s) not found in username.json: ${missing.join(', ')}`);
+    }
+    if (missingPassword.length > 0) {
+        console.warn(`[Phase8] ${missingPassword.length} email(s) missing password in username.json: ${missingPassword.join(', ')}`);
+    }
+
+    if (matched.length === 0) {
+        throw new Error(`No usable Phase8 accounts found from ${path.basename(PHASE8_ACCOUNT_LIST_FILE)}`);
+    }
+
+    console.log(`[Phase8] loaded ${matched.length}/${emails.length} account(s) from ${path.basename(PHASE8_ACCOUNT_LIST_FILE)}`);
+    return matched;
 }
 
 function parseTimeValue(value) {
@@ -1562,7 +1633,7 @@ async function runPhase8ForEntry(entry, index, total, sharedBrowserService = nul
 }
 
 async function startPhase8() {
-    console.log('[Start] Phase8 mode: iterate username.json and fetch token by email OTP');
+    console.log(`[Start] Phase8 mode: fetch token by email OTP for accounts listed in ${path.basename(PHASE8_ACCOUNT_LIST_FILE)}`);
 
     assertNotRunningWithXvfb();
 
@@ -1577,11 +1648,7 @@ async function startPhase8() {
         throw new Error('Phase8 legacy mail provider requires mailAdminPassword');
     }
 
-    const records = getUsernameRecords();
-    if (records.length === 0) {
-        console.log('[Phase8] username.json is empty');
-        return;
-    }
+    const records = getPhase8TargetEntries();
 
     let success = 0;
     let failed = 0;

@@ -165,7 +165,7 @@ node index.js --phase2
 node index.js --phase3
 ```
 
-按 `username.json` 批量补 token：
+按指定名单批量补 token。先创建 `phase8_accounts.txt`，每行一个邮箱，脚本会自动从 `username.json` 读取对应密码：
 
 ```bash
 node index.js --phase8
