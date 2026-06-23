@@ -10,6 +10,7 @@ class BrowserService {
     constructor(proxy, browserOptions = {}) {
         this.browser = null;
         this.page = null;
+        this.accountContext = null;
         this.proxy = proxy; // { host, port, username, password }
         const executablePath =
             browserOptions.chromePath ||
@@ -90,6 +91,11 @@ class BrowserService {
             await targetPage.bringToFront();
         }
         this.page = targetPage;
+        await this.setupPage(targetPage);
+        console.log('[Browser] 浏览器已启动 (1280x900)');
+    }
+
+    async setupPage(targetPage) {
         await targetPage.setViewport({ width: 1280, height: 900 });
         await targetPage.setExtraHTTPHeaders({
             'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
@@ -102,7 +108,46 @@ class BrowserService {
                 get: () => ['zh-CN', 'zh', 'en-US', 'en'],
             });
         });
-        console.log('[Browser] 浏览器已启动 (1280x900)');
+    }
+
+    async closeAccountPage(page = this.page, context = this.accountContext) {
+        if (context) {
+            await context.close().catch(() => {});
+            return;
+        }
+
+        if (page && typeof page.isClosed === 'function' && !page.isClosed()) {
+            await page.close().catch(() => {});
+        } else if (page) {
+            await page.close?.().catch(() => {});
+        }
+    }
+
+    async prepareNewAccountPage() {
+        if (!this.browser) {
+            throw new Error('浏览器尚未启动，无法创建新账号页面');
+        }
+
+        const previousPage = this.page;
+        const previousContext = this.accountContext;
+        this.page = null;
+        this.accountContext = null;
+
+        let targetPage = null;
+        const createContext = this.browser.createBrowserContext || this.browser.createIncognitoBrowserContext;
+        if (this.browserOptions.incognito && typeof createContext === 'function') {
+            this.accountContext = await createContext.call(this.browser);
+            targetPage = await this.accountContext.newPage();
+            console.log('[Browser] 已为本轮账号创建新的无痕上下文');
+        } else {
+            targetPage = await this.browser.newPage();
+            console.log('[Browser] 已为本轮账号创建新的页面');
+        }
+
+        await targetPage.bringToFront().catch(() => {});
+        this.page = targetPage;
+        await this.setupPage(targetPage);
+        await this.closeAccountPage(previousPage, previousContext);
     }
 
     clearUserDataDir() {
@@ -141,9 +186,11 @@ class BrowserService {
      */
     async close() {
         if (this.browser) {
+            await this.closeAccountPage().catch(() => {});
             await this.browser.close().catch(() => {});
             this.browser = null;
             this.page = null;
+            this.accountContext = null;
         }
     }
 

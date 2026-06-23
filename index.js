@@ -1208,7 +1208,7 @@ async function phase3(smsProvider, mailProvider, browserService, oauthService, u
 /**
  * 单次注册流程
  */
-async function runSingleRegistration() {
+async function runSingleRegistration(sharedBrowserService = null) {
     console.log('\n=========================================');
     console.log('[主程序] 开始一次全新的注册与授权流程');
     console.log('=========================================');
@@ -1246,15 +1246,12 @@ async function runSingleRegistration() {
         username: config.proxyUsername,
         password: config.proxyPassword,
     } : null;
-    let browserService = null;
+    let browserService = sharedBrowserService;
     let oauthService = null;
+    const ownsBrowserService = !sharedBrowserService;
 
-    const createServices = (useProxy) => {
+    const createOAuthService = (useProxy) => {
         const proxy = useProxy ? baseProxy : null;
-        const b = new BrowserService(proxy, {
-            useChrome: config.useChrome,
-            chromePath: config.chromePath,
-        });
         const oauthProxy = proxy ? {
             protocol: proxy.protocol,
             host: proxy.host,
@@ -1262,7 +1259,16 @@ async function runSingleRegistration() {
             username: proxy.username,
             password: proxy.password,
         } : null;
-        const o = new OAuthService({ proxy: oauthProxy });
+        return new OAuthService({ proxy: oauthProxy });
+    };
+
+    const createServices = (useProxy) => {
+        const proxy = useProxy ? baseProxy : null;
+        const b = new BrowserService(proxy, {
+            useChrome: config.useChrome,
+            chromePath: config.chromePath,
+        });
+        const o = createOAuthService(useProxy);
         return { b, o };
     };
 
@@ -1387,16 +1393,22 @@ async function runSingleRegistration() {
         const hasProxy = !!baseProxy;
 
         // 优先走配置代理
-        ({ b: browserService, o: oauthService } = createServices(hasProxy));
-        await browserService.launch();
+        if (ownsBrowserService) {
+            ({ b: browserService, o: oauthService } = createServices(hasProxy));
+            await browserService.launch();
+        } else {
+            oauthService = createOAuthService(hasProxy);
+        }
+        await browserService.prepareNewAccountPage();
         try {
             return await executeFlow();
         } catch (error) {
-            if (hasProxy && isProxyConnectionError(error)) {
+            if (ownsBrowserService && hasProxy && isProxyConnectionError(error)) {
                 console.warn('[主程序] 检测到代理连接失败，自动切换为直连重试本轮任务...');
                 await browserService.close().catch(() => {});
                 ({ b: browserService, o: oauthService } = createServices(false));
                 await browserService.launch();
+                await browserService.prepareNewAccountPage();
                 return await executeFlow();
             }
             throw error;
@@ -1407,14 +1419,16 @@ async function runSingleRegistration() {
         console.error('[主程序] 本次任务执行失败:', error.message);
         throw error;
     } finally {
-        await browserService.close();
+        if (ownsBrowserService && browserService) {
+            await browserService.close();
+        }
     }
 }
 
 /**
  * 检查 token 数量
  */
-async function runPhase8ForEntry(entry, index, total) {
+async function runPhase8ForEntry(entry, index, total, sharedBrowserService = null) {
     const email = String(entry?.email || '').trim();
     if (!email) {
         throw new Error('Phase8 entry is missing email');
@@ -1439,12 +1453,8 @@ async function runPhase8ForEntry(entry, index, total) {
         password: config.proxyPassword,
     } : null;
 
-    const createServices = (useProxy) => {
+    const createOAuthService = (useProxy) => {
         const proxy = useProxy ? baseProxy : null;
-        const b = new BrowserService(proxy, {
-            useChrome: config.useChrome,
-            chromePath: config.chromePath,
-        });
         const oauthProxy = proxy ? {
             protocol: proxy.protocol,
             host: proxy.host,
@@ -1452,12 +1462,22 @@ async function runPhase8ForEntry(entry, index, total) {
             username: proxy.username,
             password: proxy.password,
         } : null;
-        const o = new OAuthService({ proxy: oauthProxy });
+        return new OAuthService({ proxy: oauthProxy });
+    };
+
+    const createServices = (useProxy) => {
+        const proxy = useProxy ? baseProxy : null;
+        const b = new BrowserService(proxy, {
+            useChrome: config.useChrome,
+            chromePath: config.chromePath,
+        });
+        const o = createOAuthService(useProxy);
         return { b, o };
     };
 
-    let browserService = null;
+    let browserService = sharedBrowserService;
     let oauthService = null;
+    const ownsBrowserService = !sharedBrowserService;
 
     const userData = {
         fullName: String(entry?.name || email.split('@')[0] || 'user').trim(),
@@ -1507,19 +1527,25 @@ async function runPhase8ForEntry(entry, index, total) {
 
     try {
         const hasProxy = !!baseProxy;
-        ({ b: browserService, o: oauthService } = createServices(hasProxy));
-        await browserService.launch();
+        if (ownsBrowserService) {
+            ({ b: browserService, o: oauthService } = createServices(hasProxy));
+            await browserService.launch();
+        } else {
+            oauthService = createOAuthService(hasProxy);
+        }
+        await browserService.prepareNewAccountPage();
 
         try {
             const tokenData = await executeFlow();
             updateUsernameStatus(email, 'oauth_done');
             return tokenData;
         } catch (error) {
-            if (hasProxy && isProxyConnectionError(error)) {
+            if (ownsBrowserService && hasProxy && isProxyConnectionError(error)) {
                 console.warn('[Phase8] proxy failed, retry this account without proxy...');
                 await browserService.close().catch(() => {});
                 ({ b: browserService, o: oauthService } = createServices(false));
                 await browserService.launch();
+                await browserService.prepareNewAccountPage();
                 const tokenData = await executeFlow();
                 updateUsernameStatus(email, 'oauth_done');
                 return tokenData;
@@ -1528,7 +1554,7 @@ async function runPhase8ForEntry(entry, index, total) {
             throw error;
         }
     } finally {
-        if (browserService) {
+        if (ownsBrowserService && browserService) {
             await browserService.close().catch(() => {});
         }
     }
@@ -1559,25 +1585,43 @@ async function startPhase8() {
     let success = 0;
     let failed = 0;
 
-    for (let i = 0; i < records.length; i++) {
-        const entry = records[i];
-        const idx = i + 1;
-        console.log(`\\n[Phase8] ===== ${idx}/${records.length} =====`);
-        console.log(`[Phase8] email: ${entry?.email || '(empty)'}`);
+    const baseProxy = config.proxyHost ? {
+        protocol: config.proxyProtocol,
+        host: config.proxyHost,
+        port: config.proxyPort,
+        username: config.proxyUsername,
+        password: config.proxyPassword,
+    } : null;
+    const sharedBrowserService = new BrowserService(baseProxy, {
+        useChrome: config.useChrome,
+        chromePath: config.chromePath,
+    });
 
-        try {
-            await runPhase8ForEntry(entry, idx, records.length);
-            success++;
-        } catch (error) {
-            failed++;
-            console.error(`[Phase8] (${idx}/${records.length}) failed: ${error.message}`);
-            appendFailedToShibai(entry);
-        }
+    try {
+        await sharedBrowserService.launch();
 
-        if (i < records.length - 1) {
-            console.log(`[Phase8] wait ${PHASE8_ACCOUNT_DELAY_MS / 1000}s before next account...`);
-            await new Promise(r => setTimeout(r, PHASE8_ACCOUNT_DELAY_MS));
+        for (let i = 0; i < records.length; i++) {
+            const entry = records[i];
+            const idx = i + 1;
+            console.log(`\\n[Phase8] ===== ${idx}/${records.length} =====`);
+            console.log(`[Phase8] email: ${entry?.email || '(empty)'}`);
+
+            try {
+                await runPhase8ForEntry(entry, idx, records.length, sharedBrowserService);
+                success++;
+            } catch (error) {
+                failed++;
+                console.error(`[Phase8] (${idx}/${records.length}) failed: ${error.message}`);
+                appendFailedToShibai(entry);
+            }
+
+            if (i < records.length - 1) {
+                console.log(`[Phase8] wait ${PHASE8_ACCOUNT_DELAY_MS / 1000}s before next account...`);
+                await new Promise(r => setTimeout(r, PHASE8_ACCOUNT_DELAY_MS));
+            }
         }
+    } finally {
+        await sharedBrowserService.close().catch(() => {});
     }
 
     console.log(`\\n[Phase8] done: success=${success}, failed=${failed}, total=${records.length}`);
@@ -1663,14 +1707,64 @@ async function startBatch() {
         SELECTED_SMS_OPERATOR = operatorSelection?.operator || '';
     }
 
-    if (PHASE2_ONLY || STOP_AFTER_PHASE2) {
-        const target = PHASE2_ONLY ? 1 : TARGET_COUNT;
-        let completed = 0;
-        while (completed < target) {
-            console.log(`\n[进度] Phase2 ${completed} / ${target}`);
+    const baseProxy = config.proxyHost ? {
+        protocol: config.proxyProtocol,
+        host: config.proxyHost,
+        port: config.proxyPort,
+        username: config.proxyUsername,
+        password: config.proxyPassword,
+    } : null;
+    const sharedBrowserService = new BrowserService(baseProxy, {
+        useChrome: config.useChrome,
+        chromePath: config.chromePath,
+    });
+
+    try {
+        await sharedBrowserService.launch();
+
+        if (PHASE2_ONLY || STOP_AFTER_PHASE2) {
+            const target = PHASE2_ONLY ? 1 : TARGET_COUNT;
+            let completed = 0;
+            while (completed < target) {
+                console.log(`\n[进度] Phase2 ${completed} / ${target}`);
+                try {
+                    await runSingleRegistration(sharedBrowserService);
+                    completed++;
+                } catch (error) {
+                    BATCH_FAILURES.push(buildRunContextSummary(error?.runContext || {}, error));
+                    const shouldRetryImmediately = !!error?.noRetryDelay
+                        || error?.code === 'SMS_ACTIVATION_CANCELLED'
+                        || error?.code === 'SMS_CODE_TIMEOUT_CANCELLED'
+                        || error?.code === 'PHONE_ALREADY_REGISTERED';
+                    if (shouldRetryImmediately) {
+                        console.error('[主程序] Phase2 流程失败，立即进入下一轮...');
+                        continue;
+                    }
+                    console.error('[主程序] Phase2 流程失败，30 秒后重试...');
+                    await new Promise(r => setTimeout(r, 30000));
+                }
+            }
+
+            console.log(`\n[完成] Phase2 收尾数量 (${completed}) 已达目标 (${target})。`);
+            if (BATCH_FAILURES.length > 0) {
+                printBatchFailureSummary(BATCH_FAILURES);
+            }
+            return;
+        }
+
+        archiveExistingTokens();
+
+        while (true) {
+            const currentCount = await checkTokenCount();
+            if (currentCount >= TARGET_COUNT) {
+                console.log(`\n[完成] Token 数量 (${currentCount}) 已达目标 (${TARGET_COUNT})。`);
+                break;
+            }
+
+            console.log(`\n[进度] ${currentCount} / ${TARGET_COUNT}`);
+
             try {
-                await runSingleRegistration();
-                completed++;
+                await runSingleRegistration(sharedBrowserService);
             } catch (error) {
                 BATCH_FAILURES.push(buildRunContextSummary(error?.runContext || {}, error));
                 const shouldRetryImmediately = !!error?.noRetryDelay
@@ -1678,51 +1772,19 @@ async function startBatch() {
                     || error?.code === 'SMS_CODE_TIMEOUT_CANCELLED'
                     || error?.code === 'PHONE_ALREADY_REGISTERED';
                 if (shouldRetryImmediately) {
-                    console.error('[主程序] Phase2 流程失败，立即进入下一轮...');
+                    console.error('[主程序] 注册失败，立即进入下一轮...');
                     continue;
                 }
-                console.error('[主程序] Phase2 流程失败，30 秒后重试...');
+                console.error('[主程序] 注册失败，30 秒后重试...');
                 await new Promise(r => setTimeout(r, 30000));
             }
         }
 
-        console.log(`\n[完成] Phase2 收尾数量 (${completed}) 已达目标 (${target})。`);
         if (BATCH_FAILURES.length > 0) {
             printBatchFailureSummary(BATCH_FAILURES);
         }
-        return;
-    }
-
-    archiveExistingTokens();
-
-    while (true) {
-        const currentCount = await checkTokenCount();
-        if (currentCount >= TARGET_COUNT) {
-            console.log(`\n[完成] Token 数量 (${currentCount}) 已达目标 (${TARGET_COUNT})。`);
-            break;
-        }
-
-        console.log(`\n[进度] ${currentCount} / ${TARGET_COUNT}`);
-
-        try {
-            await runSingleRegistration();
-        } catch (error) {
-            BATCH_FAILURES.push(buildRunContextSummary(error?.runContext || {}, error));
-            const shouldRetryImmediately = !!error?.noRetryDelay
-                || error?.code === 'SMS_ACTIVATION_CANCELLED'
-                || error?.code === 'SMS_CODE_TIMEOUT_CANCELLED'
-                || error?.code === 'PHONE_ALREADY_REGISTERED';
-            if (shouldRetryImmediately) {
-                console.error('[主程序] 注册失败，立即进入下一轮...');
-                continue;
-            }
-            console.error('[主程序] 注册失败，30 秒后重试...');
-            await new Promise(r => setTimeout(r, 30000));
-        }
-    }
-
-    if (BATCH_FAILURES.length > 0) {
-        printBatchFailureSummary(BATCH_FAILURES);
+    } finally {
+        await sharedBrowserService.close().catch(() => {});
     }
 }
 
