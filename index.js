@@ -1534,7 +1534,7 @@ async function runPhase8ForEntry(entry, index, total, sharedBrowserService = nul
         } else {
             oauthService = createOAuthService(hasProxy);
         }
-        await browserService.prepareNewAccountPage({ forceNewContext: true });
+        await browserService.prepareNewAccountPage();
 
         try {
             const tokenData = await executeFlow();
@@ -1546,7 +1546,7 @@ async function runPhase8ForEntry(entry, index, total, sharedBrowserService = nul
                 await browserService.close().catch(() => {});
                 ({ b: browserService, o: oauthService } = createServices(false));
                 await browserService.launch();
-                await browserService.prepareNewAccountPage({ forceNewContext: true });
+                await browserService.prepareNewAccountPage();
                 const tokenData = await executeFlow();
                 updateUsernameStatus(email, 'oauth_done');
                 return tokenData;
