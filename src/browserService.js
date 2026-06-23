@@ -81,14 +81,13 @@ class BrowserService {
         const { page, browser } = await connect(connectOptions);
         this.browser = browser;
 
-        // 尝试在已有窗口打开新标签页
-        let targetPage = null;
+        // 无痕模式下复用 connect 返回的初始页面，避免 browser.newPage()
+        // 创建到默认上下文，导致实际导航落到普通窗口。
+        let targetPage = page;
         const pages = await browser.pages?.();
-        if (pages && pages.length > 0) {
+        if (!this.browserOptions.incognito && pages && pages.length > 0) {
             targetPage = await browser.newPage();
             await targetPage.bringToFront();
-        } else {
-            targetPage = page;
         }
         this.page = targetPage;
         await targetPage.setViewport({ width: 1280, height: 900 });
