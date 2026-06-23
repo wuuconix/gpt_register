@@ -23,6 +23,7 @@ class BrowserService {
             useChrome: browserOptions.useChrome ?? config.useChrome ?? true,
             chromePath: executablePath,
             userDataDir: browserOptions.userDataDir ?? config.browserUserDataDir ?? '',
+            clearUserDataDir: browserOptions.clearUserDataDir ?? config.browserClearUserDataDir ?? false,
             incognito: browserOptions.incognito ?? config.browserIncognito ?? true,
             clearChatGptSession: browserOptions.clearChatGptSession ?? config.browserClearChatGptSession ?? false,
         };
@@ -59,8 +60,10 @@ class BrowserService {
         }
 
         if (this.browserOptions.userDataDir) {
-            this.clearUserDataDir();
             const userDataDir = path.resolve(this.browserOptions.userDataDir);
+            if (this.browserOptions.clearUserDataDir) {
+                this.clearUserDataDir();
+            }
             connectOptions.customConfig = {
                 ...(connectOptions.customConfig || {}),
                 userDataDir,
@@ -123,11 +126,12 @@ class BrowserService {
         }
     }
 
-    async prepareNewAccountPage() {
+    async prepareNewAccountPage(options = {}) {
         if (!this.browser) {
             throw new Error('浏览器尚未启动，无法创建新账号页面');
         }
 
+        const { forceNewContext = false } = options;
         const previousPage = this.page;
         const previousContext = this.accountContext;
         this.page = null;
@@ -135,10 +139,10 @@ class BrowserService {
 
         let targetPage = null;
         const createContext = this.browser.createBrowserContext || this.browser.createIncognitoBrowserContext;
-        if (this.browserOptions.incognito && typeof createContext === 'function') {
+        if ((forceNewContext || this.browserOptions.incognito) && typeof createContext === 'function') {
             this.accountContext = await createContext.call(this.browser);
             targetPage = await this.accountContext.newPage();
-            console.log('[Browser] 已为本轮账号创建新的无痕上下文');
+            console.log('[Browser] 已为本轮账号创建新的独立上下文');
         } else {
             targetPage = await this.browser.newPage();
             console.log('[Browser] 已为本轮账号创建新的页面');
@@ -449,12 +453,13 @@ class BrowserService {
         return String(value || '').replace(/\D+/g, '');
     }
 
-    async chooseExistingOAuthAccount({ phone = '', fullName = '', tag = '[OAuth]' } = {}) {
+    async chooseExistingOAuthAccount({ phone = '', fullName = '', email = '', tag = '[OAuth]' } = {}) {
         const phoneDigits = this.normalizePhoneDigits(phone);
         const localDigits = phoneDigits.length > 6 ? phoneDigits.slice(-9) : phoneDigits;
         const nameText = this.normalizeComparableText(fullName);
+        const emailText = this.normalizeComparableText(email);
 
-        const result = await this.page.evaluate(({ phoneDigits, localDigits, nameText }) => {
+        const result = await this.page.evaluate(({ phoneDigits, localDigits, nameText, emailText }) => {
             const isVisible = (el) => {
                 if (!el) return false;
                 const rect = el.getBoundingClientRect();
@@ -469,6 +474,7 @@ class BrowserService {
             const normalized = (text) => String(text || '').trim().toLowerCase();
             const nodes = Array.from(document.querySelectorAll('button, [role="button"], a, [tabindex]'));
             let best = null;
+            let switchAccount = null;
 
             for (const node of nodes) {
                 if (!isVisible(node)) continue;
@@ -477,7 +483,27 @@ class BrowserService {
                 const textNorm = normalized(text);
                 const digits = digitsOnly(text);
 
+                if (!switchAccount && (
+                    textNorm.includes('use another account')
+                    || textNorm.includes('continue with another account')
+                    || textNorm.includes('sign in with another account')
+                    || textNorm.includes('使用其他账号')
+                    || textNorm.includes('使用其他帳號')
+                    || textNorm.includes('其他账号')
+                    || textNorm.includes('其他帳號')
+                    || textNorm.includes('换个账号')
+                    || textNorm.includes('切换账号')
+                )) {
+                    switchAccount = {
+                        action: 'switch',
+                        text: text.slice(0, 200),
+                        x: node.getBoundingClientRect().left + node.getBoundingClientRect().width / 2,
+                        y: node.getBoundingClientRect().top + node.getBoundingClientRect().height / 2,
+                    };
+                }
+
                 let score = 0;
+                if (emailText && textNorm.includes(emailText)) score += 120;
                 if (phoneDigits && digits.includes(phoneDigits)) score += 100;
                 if (localDigits && digits.includes(localDigits)) score += 80;
                 if (nameText && textNorm.includes(nameText)) score += 60;
@@ -488,6 +514,7 @@ class BrowserService {
 
                 if (!best || score > best.score) {
                     best = {
+                        action: 'select',
                         score,
                         text: text.slice(0, 200),
                         rect: node.getBoundingClientRect().toJSON ? node.getBoundingClientRect().toJSON() : null,
@@ -497,12 +524,21 @@ class BrowserService {
                 }
             }
 
+            if (emailText && (!best || !normalized(best.text).includes(emailText))) {
+                return switchAccount || {
+                    action: 'missing-target-email',
+                    email: emailText,
+                    visibleText: document.body?.innerText?.slice(0, 500) || '',
+                };
+            }
+
             if (!best && nodes.length === 1) {
                 const node = nodes[0];
                 const text = (node.innerText || node.textContent || '').trim();
                 if (isVisible(node) && text) {
                     best = {
                         score: 1,
+                        action: 'select',
                         text: text.slice(0, 200),
                         x: node.getBoundingClientRect().left + node.getBoundingClientRect().width / 2,
                         y: node.getBoundingClientRect().top + node.getBoundingClientRect().height / 2,
@@ -511,13 +547,20 @@ class BrowserService {
             }
 
             return best;
-        }, { phoneDigits, localDigits, nameText });
+        }, { phoneDigits, localDigits, nameText, emailText });
 
         if (!result) {
             throw new Error('choose-an-account 页面未找到可点击的账号卡片');
         }
+        if (result.action === 'missing-target-email') {
+            throw new Error(`choose-an-account 页面没有目标邮箱 ${emailText}，拒绝选择已有账号`);
+        }
 
-        console.log(`${tag} 选择已有账号: ${result.text}`);
+        if (result.action === 'switch') {
+            console.log(`${tag} 当前账号列表没有目标邮箱，切换到其他账号登录: ${result.text}`);
+        } else {
+            console.log(`${tag} 选择已有账号: ${result.text}`);
+        }
         await this.page.mouse.click(result.x, result.y);
         await SLEEP(4000);
         await this.waitForCloudflare(30000);
@@ -1696,6 +1739,7 @@ class BrowserService {
                 await this.chooseExistingOAuthAccount({
                     phone,
                     fullName: opts.fullName || '',
+                    email: loginMethod === 'email' ? email : '',
                     tag: '[OAuth]',
                 });
                 lastHandledUrl = '';

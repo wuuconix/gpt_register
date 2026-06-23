@@ -1490,6 +1490,7 @@ async function runPhase8ForEntry(entry, index, total, sharedBrowserService = nul
         oauthService.regeneratePKCE();
         const authUrl = oauthService.getAuthUrl();
         console.log(`[Phase8] (${index}/${total}) OAuth URL: ${authUrl.substring(0, 100)}...`);
+        await browserService.clearChatGptSession();
         await browserService.navigateToOAuth(authUrl);
 
         const callbackUrl = await browserService.oauthLoginAndAuthorize({
@@ -1533,7 +1534,7 @@ async function runPhase8ForEntry(entry, index, total, sharedBrowserService = nul
         } else {
             oauthService = createOAuthService(hasProxy);
         }
-        await browserService.prepareNewAccountPage();
+        await browserService.prepareNewAccountPage({ forceNewContext: true });
 
         try {
             const tokenData = await executeFlow();
@@ -1545,7 +1546,7 @@ async function runPhase8ForEntry(entry, index, total, sharedBrowserService = nul
                 await browserService.close().catch(() => {});
                 ({ b: browserService, o: oauthService } = createServices(false));
                 await browserService.launch();
-                await browserService.prepareNewAccountPage();
+                await browserService.prepareNewAccountPage({ forceNewContext: true });
                 const tokenData = await executeFlow();
                 updateUsernameStatus(email, 'oauth_done');
                 return tokenData;

@@ -177,6 +177,7 @@ module.exports = {
     useChrome: config.useChrome !== false,
     chromePath: config.chromePath || 'google-chrome-stable',
     browserUserDataDir: resolveProjectPath(config.browserUserDataDir || ''),
+    browserClearUserDataDir: parseBoolean(config.browserClearUserDataDir, false),
     browserIncognito: parseBoolean(config.browserIncognito, true),
     browserClearChatGptSession: parseBoolean(config.browserClearChatGptSession, false),
 

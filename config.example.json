@@ -73,6 +73,7 @@
   "useChrome": true,
   "chromePath": "/path/to/your/browser",
   "browserUserDataDir": "browser-profile",
+  "browserClearUserDataDir": true,
   "browserIncognito": false,
   "browserClearChatGptSession": true
 }

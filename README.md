@@ -74,6 +74,7 @@ CONFIG_FILE=./config.server.json node index.js 1
   "mailDomains": ["your-domain.example.com"],
   "tokenOutputDirs": ["tokens"],
   "browserUserDataDir": "browser-profile",
+  "browserClearUserDataDir": true,
   "browserIncognito": false,
   "browserClearChatGptSession": true
 }
@@ -102,6 +103,7 @@ CONFIG_FILE=./config.server.json node index.js 1
 | `tokenOutputDir` | 单个 token 输出目录 |
 | `tokenOutputDirs` | 多个 token 输出目录，优先级高于 `tokenOutputDir` |
 | `browserUserDataDir` | 浏览器持久化 profile 目录 |
+| `browserClearUserDataDir` | 启动浏览器前是否清空 `browserUserDataDir` 内的全部内容 |
 | `browserIncognito` | 是否使用无痕上下文 |
 | `browserClearChatGptSession` | 启动时是否清理 ChatGPT 登录状态 |
 
