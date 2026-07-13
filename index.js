@@ -763,46 +763,22 @@ function getPhase8TargetEntries() {
         throw new Error(`Phase8 account list is empty: ${path.basename(PHASE8_ACCOUNT_LIST_FILE)}`);
     }
 
+    // Phase8 采用邮箱一次性验证码登录；phase8_accounts.txt 才是唯一必需的账号来源。
+    // username.json 若存在，仅用来补充可选资料及在流程结束后更新状态。
     const records = getUsernameRecords();
-    if (records.length === 0) {
-        throw new Error('username.json is empty');
-    }
-
     const recordByEmail = new Map();
     for (const record of records) {
         const key = String(record?.email || '').trim().toLowerCase();
         if (key) recordByEmail.set(key, record);
     }
 
-    const matched = [];
-    const missing = [];
-    const missingPassword = [];
-    for (const email of emails) {
-        const record = recordByEmail.get(email.toLowerCase());
-        if (!record) {
-            missing.push(email);
-            continue;
-        }
-        if (!String(record?.password || '').trim()) {
-            missingPassword.push(email);
-            continue;
-        }
-        matched.push(record);
-    }
-
-    if (missing.length > 0) {
-        console.warn(`[Phase8] ${missing.length} email(s) not found in username.json: ${missing.join(', ')}`);
-    }
-    if (missingPassword.length > 0) {
-        console.warn(`[Phase8] ${missingPassword.length} email(s) missing password in username.json: ${missingPassword.join(', ')}`);
-    }
-
-    if (matched.length === 0) {
-        throw new Error(`No usable Phase8 accounts found from ${path.basename(PHASE8_ACCOUNT_LIST_FILE)}`);
-    }
-
-    console.log(`[Phase8] loaded ${matched.length}/${emails.length} account(s) from ${path.basename(PHASE8_ACCOUNT_LIST_FILE)}`);
-    return matched;
+    const entries = emails.map((email) => ({
+        ...(recordByEmail.get(email.toLowerCase()) || {}),
+        email,
+    }));
+    const enrichedCount = entries.filter((entry) => recordByEmail.has(entry.email.toLowerCase())).length;
+    console.log(`[Phase8] loaded ${entries.length} account(s) from ${path.basename(PHASE8_ACCOUNT_LIST_FILE)} (${enrichedCount} found in username.json; password not required)`);
+    return entries;
 }
 
 function parseTimeValue(value) {
@@ -1552,7 +1528,6 @@ async function runPhase8ForEntry(entry, index, total, sharedBrowserService = nul
 
     const userData = {
         fullName: String(entry?.name || email.split('@')[0] || 'user').trim(),
-        password: String(entry?.password || '').trim(),
         birthDate: String(entry?.birthDate || '1996-01-01').trim(),
         age: calcAgeFromBirthDate(entry?.birthDate),
     };
@@ -1569,7 +1544,6 @@ async function runPhase8ForEntry(entry, index, total, sharedBrowserService = nul
             preferEmailOtp: true,
             phone: String(entry?.phone || ''),
             email,
-            password: userData.password,
             fullName: userData.fullName,
             age: userData.age,
             birthDate: userData.birthDate,
