@@ -1593,7 +1593,7 @@ class BrowserService {
         // 先等页面渲染
         await SLEEP(5000);
 
-        for (let round = 0; round < 30; round++) {
+        for (let round = 0; round < 15; round++) {
             await SLEEP(3000);
 
             let url, pageInfo;
